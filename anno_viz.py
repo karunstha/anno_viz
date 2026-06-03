@@ -1,4 +1,4 @@
-from app import main
+from annoviz.app import main
 
 
 if __name__ == "__main__":
