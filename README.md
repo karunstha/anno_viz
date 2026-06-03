@@ -4,7 +4,7 @@ Anno Viz is a local YOLO annotation viewer and editor for image datasets. It ope
 
 ## Screenshot
 
-![Anno Viz screenshot](docs/screenshots/anno-viz.png)
+![Anno Viz screenshot](https://raw.githubusercontent.com/karunstha/anno_viz/main/docs/screenshots/anno-viz.png)
 
 ## Dataset Layout
 
