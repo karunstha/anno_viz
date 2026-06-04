@@ -133,6 +133,11 @@ def main():
     parser.add_argument("--save-dir", default=None, type=Path)
     parser.add_argument("--start-index", default=0, type=int)
     parser.add_argument("--port", default=0, type=int, help="Local web UI port. Defaults to a free port.")
+    parser.add_argument(
+        "--browser",
+        action="store_true",
+        help="Open the editor in the default browser instead of creating a native desktop window.",
+    )
 
     args = parser.parse_args()
     config_file = workspace_config_file()
@@ -160,6 +165,7 @@ def main():
         save_dir=args.save_dir,
         start_index=args.start_index,
         port=args.port,
+        browser=args.browser,
     )
 
 

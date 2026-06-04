@@ -1,6 +1,10 @@
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import importlib.util
+import os
 from pathlib import Path
+import sys
 from urllib.parse import parse_qs, unquote, urlparse
+import webbrowser
 import json
 import mimetypes
 import threading
@@ -40,6 +44,59 @@ def import_webview():
             "Install it with: python3 -m pip install ."
         ) from exc
     return webview
+
+
+def linux_window_help():
+    return (
+        "Native window creation failed. On Ubuntu, pywebview typically needs GTK and WebKit.\n"
+        "Install them with:\n"
+        "  sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-3.0 "
+        "gir1.2-webkit2-4.1\n"
+        "If you are using a virtualenv, create it with --system-site-packages or "
+        "install PyGObject into the virtualenv.\n"
+        "You can also bypass native window creation with:\n"
+        "  annoviz --browser\n"
+    )
+
+
+def open_in_browser(url):
+    print(f"Opening Anno Viz in browser: {url}")
+    if not webbrowser.open(url):
+        print(f"Could not launch a browser automatically. Open this URL manually: {url}")
+
+
+def browser_event_loop(url):
+    open_in_browser(url)
+    print("Press Ctrl+C to stop the local editor server.")
+    try:
+        threading.Event().wait()
+    except KeyboardInterrupt:
+        print("\nShutting down Anno Viz.")
+
+
+def has_graphical_display():
+    if os.name == "nt":
+        return True
+    return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+
+
+def is_linux():
+    return sys.platform.startswith("linux")
+
+
+def linux_gtk_missing_reason():
+    if importlib.util.find_spec("gi") is None:
+        return "PyGObject is not available in this Python environment: missing module 'gi'."
+
+    try:
+        import gi
+
+        gi.require_version("Gtk", "3.0")
+        from gi.repository import Gtk  # noqa: F401
+    except (ImportError, ValueError) as exc:
+        return f"GTK is not available through PyGObject: {exc}"
+
+    return None
 
 
 class WebEditorServer(ThreadingHTTPServer):
@@ -231,8 +288,7 @@ def save_web_label(label_path, boxes, img_w, img_h):
     print(f"saved label: {label_path} ({len(lines)} boxes)")
 
 
-def visualize(images_dir, labels_dir, classes_file=None, save_dir=None, start_index=0, port=0):
-    webview = import_webview()
+def visualize(images_dir, labels_dir, classes_file=None, save_dir=None, start_index=0, port=0, browser=False):
     server = WebEditorServer(("127.0.0.1", port), WebEditorHandler, images_dir, labels_dir, classes_file, start_index)
     host, actual_port = server.server_address
     url = f"http://{host}:{actual_port}/"
@@ -242,10 +298,35 @@ def visualize(images_dir, labels_dir, classes_file=None, save_dir=None, start_in
     thread.start()
 
     try:
+        if browser:
+            browser_event_loop(url)
+            return
+
+        if not has_graphical_display():
+            print("No graphical display detected. Falling back to browser mode.")
+            browser_event_loop(url)
+            return
+
+        webview = import_webview()
+        gui = None
+        if is_linux():
+            missing_reason = linux_gtk_missing_reason()
+            if missing_reason is not None:
+                print(missing_reason)
+                print(linux_window_help())
+                browser_event_loop(url)
+                return
+            gui = "gtk"
+
         api = EditorApi(server)
         window = webview.create_window("Anno Viz", url, js_api=api, width=1200, height=900)
         api.window = window
-        webview.start()
+        webview.start(gui=gui)
+    except Exception as exc:
+        print(f"Native window launch failed: {exc}")
+        if os.name == "posix":
+            print(linux_window_help())
+        browser_event_loop(url)
     finally:
         server.shutdown()
         server.server_close()

@@ -38,6 +38,12 @@ python3 -m venv .venv
 source .venv/bin/activate
 ```
 
+Install the published package directly with:
+
+```bash
+python3 -m pip install annoviz
+```
+
 Install Anno Viz and its dependencies from the project root:
 
 ```bash
@@ -57,6 +63,18 @@ python3 -m pip install -e .
 ```
 
 `pywebview` is required because the editor opens in a native desktop window. On macOS with Python 3.9, `requirements.txt` pins the PyObjC packages below version 12 because PyObjC 12 may try to build from source and fail on that toolchain.
+
+On Ubuntu and other Linux desktops, `pywebview` also needs system GUI libraries:
+
+```bash
+sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-3.0 gir1.2-webkit2-4.1
+```
+
+If you run Anno Viz from a virtualenv on Ubuntu, create the virtualenv with access to system packages so it can import `gi`:
+
+```bash
+python3 -m venv --system-site-packages .venv
+```
 
 ## Configure Dataset Directory
 
@@ -114,6 +132,7 @@ Other useful options:
 annoviz --start-index 25
 annoviz --port 8765
 annoviz --save-dir /path/to/rendered/previews
+annoviz --browser
 ```
 
 ## Controls
@@ -224,6 +243,12 @@ If `pywebview` is missing, run:
 
 ```bash
 python3 -m pip install .
+```
+
+If the native window does not open on Ubuntu and the error mentions `No module named 'gi'`, install the GTK/WebKit packages listed above and make sure your virtualenv can import `gi`. You can also run:
+
+```bash
+annoviz --browser
 ```
 
 If no images appear, check that your image files are inside the configured `images/` directory. Supported extensions are handled by the local image collector in `io_utils.py`.
