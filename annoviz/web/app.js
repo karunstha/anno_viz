@@ -26,6 +26,7 @@ const imageCtx = imageCanvas.getContext("2d");
 const timelineCanvas = document.getElementById("timelineCanvas");
 const timelineCtx = timelineCanvas.getContext("2d");
 const statusEl = document.getElementById("status");
+const subjectListEl = document.getElementById("subjectList");
 const rescanBtn = document.getElementById("rescanBtn");
 const applyDeletesBtn = document.getElementById("applyDeletesBtn");
 const closeBtn = document.getElementById("closeBtn");
@@ -125,12 +126,12 @@ function updateStatus() {
 }
 
 function resizeCanvases() {
-  const stageRect = document.getElementById("stage").getBoundingClientRect();
+  const imagePaneRect = document.getElementById("imagePane").getBoundingClientRect();
   const dpr = window.devicePixelRatio || 1;
-  imageCanvas.width = Math.max(1, Math.floor(stageRect.width * dpr));
-  imageCanvas.height = Math.max(1, Math.floor(stageRect.height * dpr));
-  imageCanvas.style.width = `${stageRect.width}px`;
-  imageCanvas.style.height = `${stageRect.height}px`;
+  imageCanvas.width = Math.max(1, Math.floor(imagePaneRect.width * dpr));
+  imageCanvas.height = Math.max(1, Math.floor(imagePaneRect.height * dpr));
+  imageCanvas.style.width = `${imagePaneRect.width}px`;
+  imageCanvas.style.height = `${imagePaneRect.height}px`;
   imageCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
   const timelineRect = timelineCanvas.getBoundingClientRect();
@@ -176,6 +177,19 @@ function canvasToImage(x, y) {
 
 function colorFor(clsId) {
   return ANNOTATION_COLOR;
+}
+
+function selectedBox() {
+  return state.selectedIdx == null ? null : state.boxes[state.selectedIdx] ?? null;
+}
+
+function boxMetrics(box) {
+  const b = normalizeBox(box);
+  return {
+    width: b.x2 - b.x1,
+    height: b.y2 - b.y1,
+    area: (b.x2 - b.x1) * (b.y2 - b.y1),
+  };
 }
 
 function drawTextWithBg(ctx, text, x, y, color) {
@@ -255,6 +269,84 @@ function drawImageCanvas() {
   }
 
   drawTextWithBg(imageCtx, `Mode: ${state.addMode ? "ADD" : "EDIT"}${state.dirty ? " *unsaved" : ""}`, 12, h - 14, "#fff");
+}
+
+function drawSubjectCrop(ctx, box, canvasW, canvasH, selected) {
+  const b = normalizeBox(box);
+  const metrics = boxMetrics(b);
+  const pad = Math.max(16, Math.round(Math.max(metrics.width, metrics.height) * 0.2));
+  const sx = clamp(b.x1 - pad, 0, state.image.naturalWidth - 1);
+  const sy = clamp(b.y1 - pad, 0, state.image.naturalHeight - 1);
+  const sw = Math.max(1, Math.min(state.image.naturalWidth - sx, metrics.width + pad * 2));
+  const sh = Math.max(1, Math.min(state.image.naturalHeight - sy, metrics.height + pad * 2));
+  const scale = Math.min(canvasW / sw, canvasH / sh);
+  const dw = Math.max(1, Math.round(sw * scale));
+  const dh = Math.max(1, Math.round(sh * scale));
+  const dx = Math.floor((canvasW - dw) / 2);
+  const dy = Math.floor((canvasH - dh) / 2);
+  ctx.clearRect(0, 0, canvasW, canvasH);
+  ctx.fillStyle = "#161616";
+  ctx.fillRect(0, 0, canvasW, canvasH);
+  ctx.drawImage(state.image, sx, sy, sw, sh, dx, dy, dw, dh);
+
+  const rx = dx + (b.x1 - sx) * scale;
+  const ry = dy + (b.y1 - sy) * scale;
+  const rw = metrics.width * scale;
+  const rh = metrics.height * scale;
+  ctx.strokeStyle = ANNOTATION_COLOR;
+  ctx.lineWidth = selected ? 3 : 2;
+  ctx.strokeRect(rx, ry, rw, rh);
+}
+
+function renderSubjectList() {
+  subjectListEl.textContent = "";
+  if (!state.boxes.length) {
+    const empty = document.createElement("div");
+    empty.className = "subjectEmpty";
+    empty.textContent = "No annotations yet.";
+    subjectListEl.appendChild(empty);
+    return;
+  }
+
+  state.boxes.forEach((box, idx) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "subjectItem";
+    if (idx === state.selectedIdx) button.classList.add("is-selected");
+    button.setAttribute("role", "option");
+    button.setAttribute("aria-selected", idx === state.selectedIdx ? "true" : "false");
+
+    const thumb = document.createElement("canvas");
+    thumb.className = "subjectThumb";
+    thumb.width = 88;
+    thumb.height = 88;
+
+    const body = document.createElement("div");
+    body.className = "subjectItemBody";
+
+    const title = document.createElement("span");
+    title.className = "subjectItemTitle";
+    title.textContent = `${idx + 1}. ${classLabel(box.cls_id)}`;
+
+    const metrics = boxMetrics(box);
+    const meta = document.createElement("span");
+    meta.className = "subjectItemMeta";
+    meta.textContent = `${Math.round(metrics.width)} x ${Math.round(metrics.height)} px | area ${Math.round(metrics.area)} px`;
+
+    body.append(title, meta);
+    button.append(thumb, body);
+    button.addEventListener("click", () => {
+      state.selectedIdx = idx;
+      state.selectedClass = state.boxes[idx].cls_id;
+      draw();
+    });
+    subjectListEl.appendChild(button);
+
+    if (state.imageLoaded) {
+      const ctx = thumb.getContext("2d");
+      drawSubjectCrop(ctx, box, thumb.width, thumb.height, idx === state.selectedIdx);
+    }
+  });
 }
 
 function timelineCapacity() {
@@ -343,6 +435,7 @@ function drawTimeline() {
 function draw() {
   updateStatus();
   drawImageCanvas();
+  renderSubjectList();
   drawTimeline();
 }
 
@@ -472,6 +565,30 @@ function removeSelectedBox() {
   state.boxes.splice(state.selectedIdx, 1);
   state.selectedIdx = state.boxes.length ? Math.min(state.selectedIdx, state.boxes.length - 1) : null;
   state.dirty = true;
+  draw();
+}
+
+function clearAllBoxes() {
+  if (!state.boxes.length) return;
+  state.boxes = [];
+  state.selectedIdx = null;
+  state.dirty = true;
+  draw();
+}
+
+function cycleSelection(delta) {
+  if (!state.boxes.length) {
+    state.selectedIdx = null;
+    draw();
+    return;
+  }
+
+  if (state.selectedIdx == null) {
+    state.selectedIdx = delta >= 0 ? 0 : state.boxes.length - 1;
+  } else {
+    state.selectedIdx = (state.selectedIdx + delta + state.boxes.length) % state.boxes.length;
+  }
+  state.selectedClass = state.boxes[state.selectedIdx].cls_id;
   draw();
 }
 
@@ -621,10 +738,12 @@ document.addEventListener("keydown", event => {
   else if (key === "v") { consumeKey(event); loadIndex(state.idx + 2); }
   else if (key === "x") { consumeKey(event); loadIndex(state.idx - 10); }
   else if (key === "a") { consumeKey(event); state.addMode = !state.addMode; draw(); }
-  else if (key === "Tab") { consumeKey(event); state.selectedIdx = state.boxes.length ? (state.selectedIdx == null ? 0 : (state.selectedIdx + 1) % state.boxes.length) : null; draw(); }
+  else if (key === "Tab" || key === "]") { consumeKey(event); cycleSelection(1); }
+  else if (key === "[") { consumeKey(event); cycleSelection(-1); }
   else if (key === "+" || key === "=") { consumeKey(event); cycleClass(1); }
   else if (key === "-" || key === "_") { consumeKey(event); cycleClass(-1); }
   else if (/^[0-9]$/.test(key)) { consumeKey(event); setSelectedClass(Number(key)); }
+  else if ((key === "Backspace" || key === "Delete") && event.shiftKey) { consumeKey(event); clearAllBoxes(); }
   else if (key === "Backspace" || key === "Delete") { consumeKey(event); removeSelectedBox(); }
   else if (key === "s") { consumeKey(event); saveLabels(); }
   else if (key === "d") { consumeKey(event); markPendingDelete(imageName()); }
