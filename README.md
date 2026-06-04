@@ -78,7 +78,17 @@ python3 -m venv --system-site-packages .venv
 
 ## Configure Dataset Directory
 
-Set the default dataset directory for the current workspace:
+If you run `annoviz` inside a folder that already has this layout:
+
+```text
+images/
+labels/
+classes.txt
+```
+
+Anno Viz will use the current directory as the dataset automatically. No `anno_viz_config` file is needed for that case.
+
+Otherwise, set the default dataset directory for the current workspace:
 
 ```bash
 annoviz --set-dataset-dir /path/to/dataset
@@ -94,7 +104,7 @@ annoviz --set_dataset_dir /path/to/dataset
 
 ## Run
 
-After setting the dataset directory:
+After setting the dataset directory, or from inside a dataset folder that matches the default layout:
 
 ```bash
 annoviz
@@ -238,6 +248,8 @@ If the editor says the dataset directory is not set, run:
 ```bash
 annoviz --set-dataset-dir /path/to/dataset
 ```
+
+If you are already inside the dataset folder, make sure it contains `images/`, `labels/`, and `classes.txt`. In that case `annoviz` will use the current directory automatically without creating `anno_viz_config`.
 
 If `pywebview` is missing, run:
 

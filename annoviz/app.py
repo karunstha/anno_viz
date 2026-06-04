@@ -19,6 +19,8 @@ The dataset directory should contain:
     images/
     labels/
     classes.txt
+
+If the current working directory already contains that layout, annoviz will use it automatically.
 """
 
 
@@ -61,6 +63,15 @@ def normalize_dataset_dir(path):
     if not path.is_absolute():
         path = Path.cwd() / path
     return path.resolve()
+
+
+def looks_like_dataset_dir(path):
+    dataset_dir = normalize_dataset_dir(path)
+    return (
+        (dataset_dir / "images").is_dir()
+        and (dataset_dir / "labels").is_dir()
+        and (dataset_dir / "classes.txt").is_file()
+    )
 
 
 def write_workspace_config(config_file, dataset_dir):
@@ -152,6 +163,8 @@ def main():
         return
 
     dataset_dir = args.dataset_dir.expanduser() if args.dataset_dir is not None else read_workspace_dataset_dir(config_file)
+    if dataset_dir is None and looks_like_dataset_dir(Path.cwd()):
+        dataset_dir = Path.cwd()
     if dataset_dir is None:
         parser.exit(2, f"error: {DATASET_DIR_INSTRUCTIONS}\n")
 
