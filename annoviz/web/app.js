@@ -29,6 +29,7 @@ const state = {
   slideshowPlaying: false,
   slideshowTimer: null,
   slideshowDelayMs: 500,
+  slideshowDirection: 1,
 };
 
 const imageCanvas = document.getElementById("imageCanvas");
@@ -38,6 +39,7 @@ const timelineCtx = timelineCanvas.getContext("2d");
 const statusEl = document.getElementById("status");
 const subjectListEl = document.getElementById("subjectList");
 const playBtn = document.getElementById("playBtn");
+const slideshowDirectionBtn = document.getElementById("slideshowDirectionBtn");
 const rescanBtn = document.getElementById("rescanBtn");
 const applyDeletesBtn = document.getElementById("applyDeletesBtn");
 const closeBtn = document.getElementById("closeBtn");
@@ -164,11 +166,17 @@ function updateStatus() {
   const selected = state.selectedIdx == null ? "none" : classLabel(state.boxes[state.selectedIdx].cls_id);
   const selectedClass = classLabel(state.selectedClass);
   const pending = isCurrentPendingDelete() ? " | pending delete" : "";
-  const playing = state.slideshowPlaying ? ` | playing ${state.slideshowDelayMs}ms` : "";
+  const directionName = state.slideshowDirection > 0 ? "right" : "left";
+  const playing = state.slideshowPlaying ? ` | playing ${directionName} ${state.slideshowDelayMs}ms` : "";
   statusEl.textContent = `${state.idx + 1}/${state.imageCount} | ${imageName()} | boxes=${state.boxes.length} | selected=${selected} | add-class=${selectedClass}${pending}${playing}`;
   playBtn.disabled = state.imageCount === 0;
   playBtn.textContent = state.slideshowPlaying ? "Stop" : "Play";
   playBtn.classList.toggle("is-active", state.slideshowPlaying);
+  slideshowDirectionBtn.disabled = state.imageCount === 0;
+  slideshowDirectionBtn.textContent = state.slideshowDirection > 0 ? ">" : "<";
+  slideshowDirectionBtn.title = `Slideshow direction: ${directionName}`;
+  slideshowDirectionBtn.setAttribute("aria-label", `Slideshow direction: ${directionName}`);
+  slideshowDirectionBtn.setAttribute("aria-pressed", state.slideshowDirection < 0 ? "true" : "false");
   applyDeletesBtn.disabled = state.pendingDeletes.size === 0;
 }
 
@@ -759,7 +767,7 @@ function scheduleSlideshowNext() {
   state.slideshowTimer = window.setTimeout(async () => {
     if (!state.slideshowPlaying) return;
     try {
-      await loadIndex(state.idx + 1);
+      await loadIndex(state.idx + state.slideshowDirection);
     } catch (error) {
       console.error("Slideshow stopped after frame load failed", error);
       stopSlideshow();
@@ -790,6 +798,11 @@ function stopSlideshow() {
 function toggleSlideshow() {
   if (state.slideshowPlaying) stopSlideshow();
   else startSlideshow();
+}
+
+function toggleSlideshowDirection() {
+  state.slideshowDirection = state.slideshowDirection > 0 ? -1 : 1;
+  updateStatus();
 }
 
 imageCanvas.addEventListener("mousedown", event => {
@@ -997,6 +1010,7 @@ document.addEventListener("keydown", event => {
 }, true);
 
 playBtn.addEventListener("click", toggleSlideshow);
+slideshowDirectionBtn.addEventListener("click", toggleSlideshowDirection);
 rescanBtn.addEventListener("click", () => { stopSlideshow(); loadState(state.idx, true); });
 applyDeletesBtn.addEventListener("click", applyDeletes);
 closeBtn.addEventListener("click", requestClose);

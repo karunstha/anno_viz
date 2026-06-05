@@ -75,7 +75,7 @@ def browser_event_loop(url):
 
 
 def has_graphical_display():
-    if os.name == "nt":
+    if os.name == "nt" or sys.platform == "darwin":
         return True
     return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
 

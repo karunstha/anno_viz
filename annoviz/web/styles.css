@@ -41,6 +41,11 @@
       background: #18482f;
       color: #f2fff8;
     }
+    #slideshowDirectionBtn {
+      width: 36px;
+      padding: 0;
+      font-weight: 700;
+    }
     #stage {
       flex: 1 1 auto;
       min-height: 80px;

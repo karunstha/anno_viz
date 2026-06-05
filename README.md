@@ -186,6 +186,10 @@ Play
 
 Start or stop slideshow playback
 
+`<`, `>` direction button
+
+Toggle slideshow direction
+
 Any key during slideshow
 
 Stop slideshow playback
