@@ -10,6 +10,19 @@
   <header>
     <div id="status">Loading...</div>
     <button id="playBtn" type="button">Play</button>
+    <label for="slideshowMultiplier" class="sr-only">Speed</label>
+    <select id="slideshowMultiplier" aria-label="Slideshow speed multiplier">
+      <option value="0.25">0.25x</option>
+      <option value="0.5">0.5x</option>
+      <option value="0.75">0.75x</option>
+      <option value="1" selected>1x</option>
+      <option value="1.25">1.25x</option>
+      <option value="1.5">1.5x</option>
+      <option value="1.75">1.75x</option>
+      <option value="2">2x</option>
+      <option value="3">3x</option>
+      <option value="4">4x</option>
+    </select>
     <button id="rescanBtn" type="button">Rescan</button>
     <button id="applyDeletesBtn" type="button" disabled>Apply Deletes</button>
     <button id="closeBtn" type="button">Close</button>

@@ -28,7 +28,7 @@ const state = {
   thumbCache: new Map(),
   slideshowPlaying: false,
   slideshowTimer: null,
-  slideshowDelayMs: 50,
+  slideshowDelayMs: 500,
 };
 
 const imageCanvas = document.getElementById("imageCanvas");
@@ -739,8 +739,18 @@ function cycleSelection(delta) {
 }
 
 function configuredSlideshowDelayMs() {
-  const value = Number.parseInt(window.SLIDESHOW_DELAY_MS, 10);
-  return Number.isFinite(value) && value > 0 ? value : 50;
+  const base = Number.parseInt(window.SLIDESHOW_DELAY_MS, 10);
+  const baseMs = Number.isFinite(base) && base > 0 ? base : 500;
+  const mult = 1/slideshowMultiplier();
+  // ensure integer ms
+  return Math.max(1, Math.round(baseMs * mult));
+}
+
+function slideshowMultiplier() {
+  const el = document.getElementById("slideshowMultiplier");
+  if (!el) return 1;
+  const v = Number.parseFloat(el.value);
+  return Number.isFinite(v) && v > 0 ? v : 1;
 }
 
 function scheduleSlideshowNext() {
@@ -992,6 +1002,18 @@ applyDeletesBtn.addEventListener("click", applyDeletes);
 closeBtn.addEventListener("click", requestClose);
 closeApplyBtn.addEventListener("click", () => closeEditor(true));
 closeDiscardBtn.addEventListener("click", () => closeEditor(false));
+
+const _slideshowMultiplierEl = document.getElementById("slideshowMultiplier");
+if (_slideshowMultiplierEl) {
+  _slideshowMultiplierEl.addEventListener("change", () => {
+    state.slideshowDelayMs = configuredSlideshowDelayMs();
+    if (state.slideshowPlaying) {
+      if (state.slideshowTimer != null) window.clearTimeout(state.slideshowTimer);
+      scheduleSlideshowNext();
+    }
+    updateStatus();
+  });
+}
 
 resizeCanvases();
 loadState(window.START_INDEX || 0);
