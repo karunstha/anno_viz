@@ -106,6 +106,13 @@ You can also use the underscore alias:
 annoviz --set_dataset_dir /path/to/dataset
 ```
 
+The slideshow delay defaults to 50 ms. To save a different delay for the current workspace:
+
+```bash
+annoviz set slideshow delay 75
+annoviz --set-slideshow-delay 75
+```
+
 ## Run
 
 After setting the dataset directory, or from inside a dataset folder that matches the default layout:
@@ -175,6 +182,14 @@ Move forward 2 images
 
 Move back 10 images
 
+Play
+
+Start or stop slideshow playback
+
+Any key during slideshow
+
+Stop slideshow playback
+
 `a`
 
 Toggle add-annotation mode
@@ -205,7 +220,7 @@ Save label edits
 
 `d`
 
-Mark current image for deletion
+Toggle current image in the pending-delete list
 
 Click a red thumbnail
 
@@ -221,7 +236,7 @@ Close the editor
 
 ## Delete Flow
 
-Press `d` to mark the current image for deletion. Marked thumbnails are shown in red.
+Press `d` to mark the current image for deletion, or press `d` again to undo it. Marked thumbnails are shown in red, and the current marked image gets a translucent red overlay.
 
 Deletion is not applied immediately. You can undo a pending delete by clicking the red thumbnail. To permanently remove all marked images and their label files, click `Apply Deletes`.
 
@@ -240,7 +255,8 @@ It stores JSON like:
 ```json
 {
   "dataset_dir": "/path/to/dataset",
-  "last_index": 42
+  "last_index": 42,
+  "slideshow_delay_ms": 50
 }
 ```
 

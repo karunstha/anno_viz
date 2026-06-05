@@ -110,6 +110,7 @@ class WebEditorServer(ThreadingHTTPServer):
         start_index=0,
         session_config_file=None,
         session_dataset_dir=None,
+        slideshow_delay_ms=50,
     ):
         super().__init__(server_address, handler_cls)
         self.images_dir = Path(images_dir)
@@ -118,6 +119,10 @@ class WebEditorServer(ThreadingHTTPServer):
         self.start_index = start_index
         self.session_config_file = Path(session_config_file) if session_config_file is not None else None
         self.session_dataset_dir = Path(session_dataset_dir) if session_dataset_dir is not None else None
+        try:
+            self.slideshow_delay_ms = max(1, int(slideshow_delay_ms))
+        except (TypeError, ValueError):
+            self.slideshow_delay_ms = 50
         self.pending_delete_names = set()
         self.pending_delete_lock = threading.Lock()
         self.current_index = max(0, int(start_index))
@@ -270,6 +275,7 @@ class WebEditorServer(ThreadingHTTPServer):
         payload = {
             "dataset_dir": os.path.abspath(os.fspath(self.session_dataset_dir)),
             "last_index": self.resolved_current_index(),
+            "slideshow_delay_ms": self.slideshow_delay_ms,
         }
         self.session_config_file.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
@@ -287,7 +293,14 @@ class WebEditorHandler(BaseHTTPRequestHandler):
             self.send_file(ASSET_DIR / "styles.css")
             return
         if parsed.path == "/config.js":
-            self.send_text(f"window.START_INDEX = {int(self.server.start_index)};\n", "application/javascript")
+            self.send_text(
+                "\n".join([
+                    f"window.START_INDEX = {int(self.server.start_index)};",
+                    f"window.SLIDESHOW_DELAY_MS = {int(self.server.slideshow_delay_ms)};",
+                    "",
+                ]),
+                "application/javascript",
+            )
             return
         if parsed.path == "/app.js":
             self.send_file(ASSET_DIR / "app.js")
@@ -436,6 +449,7 @@ def visualize(
     browser=False,
     session_config_file=None,
     session_dataset_dir=None,
+    slideshow_delay_ms=50,
 ):
     server = WebEditorServer(
         ("127.0.0.1", port),
@@ -446,6 +460,7 @@ def visualize(
         start_index,
         session_config_file=session_config_file,
         session_dataset_dir=session_dataset_dir,
+        slideshow_delay_ms=slideshow_delay_ms,
     )
     host, actual_port = server.server_address
     url = f"http://{host}:{actual_port}/"

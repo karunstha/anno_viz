@@ -1,3 +1,5 @@
+import os
+import stat
 from pathlib import Path
 import ast
 
@@ -121,11 +123,60 @@ def save_yolo_label(label_path, boxes, img_w, img_h):
     print(f"saved label: {label_path} ({len(lines)} boxes)")
 
 
+def _case_mismatch_hint(path):
+    try:
+        siblings = path.parent.iterdir()
+    except OSError:
+        return ""
+
+    wanted = path.name.lower()
+    for sibling in siblings:
+        if sibling.name.lower() == wanted and sibling.name != path.name:
+            return f"Found similar path with different case: {sibling}"
+    return ""
+
+
+def _ensure_images_dir(images_dir):
+    images_dir = Path(images_dir).expanduser()
+
+    try:
+        stat_result = images_dir.stat()
+    except FileNotFoundError as exc:
+        if images_dir.is_symlink():
+            try:
+                target = os.readlink(images_dir)
+            except OSError:
+                target = "<unreadable target>"
+            raise RuntimeError(f"Images dir is a broken symlink: {images_dir} -> {target}") from exc
+
+        message = f"Images dir not found: {images_dir}"
+        hint = _case_mismatch_hint(images_dir)
+        if hint:
+            message = f"{message}. {hint}"
+        raise RuntimeError(message) from exc
+    except NotADirectoryError as exc:
+        raise RuntimeError(f"Images dir path contains a non-directory component: {images_dir}") from exc
+    except PermissionError as exc:
+        raise RuntimeError(f"Cannot access images dir: {images_dir} ({exc.strerror})") from exc
+    except OSError as exc:
+        raise RuntimeError(f"Cannot access images dir: {images_dir} ({exc.strerror or exc})") from exc
+
+    if not stat.S_ISDIR(stat_result.st_mode):
+        mode = oct(stat_result.st_mode & 0o777)
+        raise RuntimeError(f"Images path is not a directory: {images_dir} (mode {mode})")
+
+    return images_dir
+
+
 def collect_images(images_dir):
-    if not images_dir.exists():
-        raise RuntimeError(f"Images dir not found: {images_dir}")
+    images_dir = _ensure_images_dir(images_dir)
     exts = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
-    return sorted(p for p in images_dir.iterdir() if p.suffix.lower() in exts)
+    try:
+        return sorted(p for p in images_dir.iterdir() if p.suffix.lower() in exts)
+    except PermissionError as exc:
+        raise RuntimeError(f"Cannot read images dir: {images_dir} ({exc.strerror})") from exc
+    except OSError as exc:
+        raise RuntimeError(f"Cannot read images dir: {images_dir} ({exc.strerror or exc})") from exc
 
 
 def refresh_images(images_dir, current_path, fallback_idx=0):

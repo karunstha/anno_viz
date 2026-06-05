@@ -2,10 +2,12 @@ from pathlib import Path
 import argparse
 import json
 import os
+import sys
 
 
 CONFIG_FILE = "anno_viz_config"
 LEGACY_DATASET_PATH_FILE = "anno_viz_datasetpath.txt"
+DEFAULT_SLIDESHOW_DELAY_MS = 50
 
 DATASET_DIR_INSTRUCTIONS = """Dataset directory is not set.
 
@@ -31,6 +33,15 @@ def workspace_config_file():
 
 def workspace_legacy_config_file():
     return Path.cwd() / LEGACY_DATASET_PATH_FILE
+
+
+def normalize_cli_args(argv):
+    argv = list(argv)
+    if len(argv) == 4 and argv[:3] == ["set", "slideshow", "delay"]:
+        return ["--set-slideshow-delay", argv[3]]
+    if len(argv) == 3 and argv[:2] in (["set", "slideshow-delay"], ["set", "slideshow-delay-ms"]):
+        return ["--set-slideshow-delay", argv[2]]
+    return argv
 
 
 def is_git_workspace(workspace_dir):
@@ -79,6 +90,18 @@ def default_classes_file(dataset_dir):
     return classes_txt
 
 
+def normalize_slideshow_delay_ms(value):
+    try:
+        delay = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("slideshow delay must be an integer number of milliseconds") from exc
+
+    if delay < 1:
+        raise ValueError("slideshow delay must be at least 1 ms")
+
+    return delay
+
+
 def looks_like_dataset_dir(path):
     dataset_dir = normalize_dataset_dir(path)
     return (
@@ -88,12 +111,14 @@ def looks_like_dataset_dir(path):
     )
 
 
-def write_workspace_config(config_file, dataset_dir, last_index=None):
-    config = {
-        "dataset_dir": str(dataset_dir),
-    }
+def write_workspace_config(config_file, dataset_dir=None, last_index=None, slideshow_delay_ms=None):
+    config = {}
+    if dataset_dir is not None:
+        config["dataset_dir"] = str(dataset_dir)
     if last_index is not None:
         config["last_index"] = max(0, int(last_index))
+    if slideshow_delay_ms is not None:
+        config["slideshow_delay_ms"] = normalize_slideshow_delay_ms(slideshow_delay_ms)
     config_file.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
 
 
@@ -112,6 +137,7 @@ def read_workspace_state(config_file):
     state = {
         "dataset_dir": None,
         "last_index": None,
+        "slideshow_delay_ms": DEFAULT_SLIDESHOW_DELAY_MS,
     }
 
     if config_file.exists():
@@ -138,6 +164,13 @@ def read_workspace_state(config_file):
                 state["last_index"] = max(0, int(last_index))
         except (TypeError, ValueError):
             state["last_index"] = None
+
+        slideshow_delay_ms = config.get("slideshow_delay_ms")
+        try:
+            if slideshow_delay_ms is not None:
+                state["slideshow_delay_ms"] = normalize_slideshow_delay_ms(slideshow_delay_ms)
+        except ValueError:
+            state["slideshow_delay_ms"] = DEFAULT_SLIDESHOW_DELAY_MS
         return state
 
     legacy_path_file = workspace_legacy_config_file()
@@ -172,6 +205,16 @@ def main():
     parser.add_argument("--classes-file", default=None, type=Path)
     parser.add_argument("--save-dir", default=None, type=Path)
     parser.add_argument("--start-index", default=None, type=int)
+    parser.add_argument(
+        "--set-slideshow-delay",
+        "--set-slideshow-delay-ms",
+        "--set_slideshow_delay",
+        "--set_slideshow_delay_ms",
+        dest="set_slideshow_delay_ms",
+        default=None,
+        type=int,
+        help=f"Save the slideshow delay in milliseconds for this workspace. Default is {DEFAULT_SLIDESHOW_DELAY_MS} ms.",
+    )
     parser.add_argument("--port", default=0, type=int, help="Local web UI port. Defaults to a free port.")
     parser.add_argument(
         "--browser",
@@ -179,15 +222,36 @@ def main():
         help="Open the editor in the default browser instead of creating a native desktop window.",
     )
 
-    args = parser.parse_args()
+    args = parser.parse_args(normalize_cli_args(sys.argv[1:]))
     config_file = workspace_config_file()
     workspace_state = read_workspace_state(config_file)
-    if args.set_dataset_dir is not None:
-        dataset_dir = normalize_dataset_dir(args.set_dataset_dir)
-        write_workspace_config(config_file, dataset_dir, last_index=0)
-        print(f"saved dataset directory to {config_file}: {dataset_dir}")
+    if args.set_dataset_dir is not None or args.set_slideshow_delay_ms is not None:
+        dataset_dir = (
+            normalize_dataset_dir(args.set_dataset_dir)
+            if args.set_dataset_dir is not None
+            else workspace_state["dataset_dir"]
+        )
+        last_index = 0 if args.set_dataset_dir is not None else workspace_state["last_index"]
+        try:
+            slideshow_delay_ms = (
+                normalize_slideshow_delay_ms(args.set_slideshow_delay_ms)
+                if args.set_slideshow_delay_ms is not None
+                else workspace_state["slideshow_delay_ms"]
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+        write_workspace_config(
+            config_file,
+            dataset_dir,
+            last_index=last_index,
+            slideshow_delay_ms=slideshow_delay_ms,
+        )
+        if args.set_dataset_dir is not None:
+            print(f"saved dataset directory to {config_file}: {dataset_dir}")
+        if args.set_slideshow_delay_ms is not None:
+            print(f"saved slideshow delay to {config_file}: {slideshow_delay_ms} ms")
         legacy_path_file = workspace_legacy_config_file()
-        if legacy_path_file.exists():
+        if args.set_dataset_dir is not None and legacy_path_file.exists():
             legacy_path_file.unlink()
         ensure_config_gitignored(config_file.parent)
         return
@@ -218,6 +282,7 @@ def main():
         browser=args.browser,
         session_config_file=session_config_file,
         session_dataset_dir=dataset_dir if session_config_file is not None else None,
+        slideshow_delay_ms=workspace_state["slideshow_delay_ms"],
     )
 
 

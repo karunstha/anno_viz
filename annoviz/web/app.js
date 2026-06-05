@@ -26,6 +26,9 @@ const state = {
   display: { x: 0, y: 0, w: 0, h: 0, fitScale: 1 },
   timelineRegions: [],
   thumbCache: new Map(),
+  slideshowPlaying: false,
+  slideshowTimer: null,
+  slideshowDelayMs: 50,
 };
 
 const imageCanvas = document.getElementById("imageCanvas");
@@ -34,6 +37,7 @@ const timelineCanvas = document.getElementById("timelineCanvas");
 const timelineCtx = timelineCanvas.getContext("2d");
 const statusEl = document.getElementById("status");
 const subjectListEl = document.getElementById("subjectList");
+const playBtn = document.getElementById("playBtn");
 const rescanBtn = document.getElementById("rescanBtn");
 const applyDeletesBtn = document.getElementById("applyDeletesBtn");
 const closeBtn = document.getElementById("closeBtn");
@@ -45,6 +49,9 @@ const closeDiscardBtn = document.getElementById("closeDiscardBtn");
 const ANNOTATION_COLOR = "#ffff00";
 const DELETE_MARK_COLOR = "#d92d20";
 const DELETE_MARK_BORDER = "#ff5a52";
+const DELETE_OVERLAY_COLOR = "rgba(217, 45, 32, 0.28)";
+const ADD_OVERLAY_COLOR = "rgba(43, 213, 118, 0.14)";
+const ADD_OVERLAY_BORDER = "rgba(43, 213, 118, 0.9)";
 const TIMELINE_SLOT_W = 44;
 const TIMELINE_GAP = 6;
 const TIMELINE_PAD_X = 6;
@@ -71,6 +78,10 @@ function classLabel(clsId) {
 
 function imageName() {
   return state.currentName;
+}
+
+function isCurrentPendingDelete() {
+  return state.pendingDeletes.has(imageName());
 }
 
 function imageUrl(name) {
@@ -127,6 +138,12 @@ function clearPendingDelete(name) {
   syncPendingDeletes();
 }
 
+function togglePendingDelete(name) {
+  if (!name) return;
+  if (state.pendingDeletes.has(name)) clearPendingDelete(name);
+  else markPendingDelete(name);
+}
+
 function closePromptMessage() {
   const count = state.pendingDeletes.size;
   const noun = count === 1 ? "image" : "images";
@@ -146,8 +163,12 @@ function hideClosePrompt() {
 function updateStatus() {
   const selected = state.selectedIdx == null ? "none" : classLabel(state.boxes[state.selectedIdx].cls_id);
   const selectedClass = classLabel(state.selectedClass);
-  const pending = state.pendingDeletes.has(imageName()) ? " | pending delete" : "";
-  statusEl.textContent = `${state.idx + 1}/${state.imageCount} | ${imageName()} | boxes=${state.boxes.length} | selected=${selected} | add-class=${selectedClass}${pending}`;
+  const pending = isCurrentPendingDelete() ? " | pending delete" : "";
+  const playing = state.slideshowPlaying ? ` | playing ${state.slideshowDelayMs}ms` : "";
+  statusEl.textContent = `${state.idx + 1}/${state.imageCount} | ${imageName()} | boxes=${state.boxes.length} | selected=${selected} | add-class=${selectedClass}${pending}${playing}`;
+  playBtn.disabled = state.imageCount === 0;
+  playBtn.textContent = state.slideshowPlaying ? "Stop" : "Play";
+  playBtn.classList.toggle("is-active", state.slideshowPlaying);
   applyDeletesBtn.disabled = state.pendingDeletes.size === 0;
 }
 
@@ -313,6 +334,22 @@ function drawImageCanvas() {
   fitImage();
   const d = state.display;
   imageCtx.drawImage(state.image, d.x, d.y, d.w, d.h);
+
+  if (isCurrentPendingDelete()) {
+    imageCtx.fillStyle = DELETE_OVERLAY_COLOR;
+    imageCtx.fillRect(d.x, d.y, d.w, d.h);
+    imageCtx.strokeStyle = DELETE_MARK_BORDER;
+    imageCtx.lineWidth = 4;
+    imageCtx.strokeRect(d.x + 2, d.y + 2, Math.max(0, d.w - 4), Math.max(0, d.h - 4));
+  }
+
+  if (state.addMode) {
+    imageCtx.fillStyle = ADD_OVERLAY_COLOR;
+    imageCtx.fillRect(d.x, d.y, d.w, d.h);
+    imageCtx.strokeStyle = ADD_OVERLAY_BORDER;
+    imageCtx.lineWidth = 4;
+    imageCtx.strokeRect(d.x + 2, d.y + 2, Math.max(0, d.w - 4), Math.max(0, d.h - 4));
+  }
 
   for (let i = 0; i < state.boxes.length; i++) {
     const b = normalizeBox(state.boxes[i]);
@@ -547,6 +584,13 @@ async function loadIndex(idx) {
   const requestedIdx = state.imageCount ? ((idx % state.imageCount) + state.imageCount) % state.imageCount : Math.max(0, idx);
   state.imageLoaded = false;
   state.selectedIdx = null;
+  state.addMode = false;
+  state.dragging = false;
+  state.dragAction = null;
+  state.dragHandle = null;
+  state.dragOriginalBox = null;
+  state.panning = false;
+  state.panStart = null;
   state.dirty = false;
   resetZoom();
   const stateResp = await fetch(`/api/state?idx=${requestedIdx}`);
@@ -615,6 +659,7 @@ async function saveLabels() {
 }
 
 async function applyDeletes() {
+  stopSlideshow();
   if (!state.pendingDeletes.size) return;
   await fetch("/api/delete", {
     method: "POST",
@@ -626,6 +671,7 @@ async function applyDeletes() {
 }
 
 async function requestClose() {
+  stopSlideshow();
   await syncPendingDeletes();
   if (state.pendingDeletes.size) {
     showClosePrompt();
@@ -635,6 +681,7 @@ async function requestClose() {
 }
 
 async function closeEditor(applyDeletes) {
+  stopSlideshow();
   hideClosePrompt();
   await syncPendingDeletes();
   if (window.pywebview?.api?.close_editor) {
@@ -689,6 +736,50 @@ function cycleSelection(delta) {
   }
   state.selectedClass = state.boxes[state.selectedIdx].cls_id;
   draw();
+}
+
+function configuredSlideshowDelayMs() {
+  const value = Number.parseInt(window.SLIDESHOW_DELAY_MS, 10);
+  return Number.isFinite(value) && value > 0 ? value : 50;
+}
+
+function scheduleSlideshowNext() {
+  if (!state.slideshowPlaying) return;
+  window.clearTimeout(state.slideshowTimer);
+  state.slideshowTimer = window.setTimeout(async () => {
+    if (!state.slideshowPlaying) return;
+    try {
+      await loadIndex(state.idx + 1);
+    } catch (error) {
+      console.error("Slideshow stopped after frame load failed", error);
+      stopSlideshow();
+      return;
+    }
+    scheduleSlideshowNext();
+  }, state.slideshowDelayMs);
+}
+
+function startSlideshow() {
+  if (!state.imageCount || state.slideshowPlaying) return;
+  state.slideshowDelayMs = configuredSlideshowDelayMs();
+  state.slideshowPlaying = true;
+  updateStatus();
+  scheduleSlideshowNext();
+}
+
+function stopSlideshow() {
+  if (state.slideshowTimer != null) {
+    window.clearTimeout(state.slideshowTimer);
+    state.slideshowTimer = null;
+  }
+  if (!state.slideshowPlaying) return;
+  state.slideshowPlaying = false;
+  updateStatus();
+}
+
+function toggleSlideshow() {
+  if (state.slideshowPlaying) stopSlideshow();
+  else startSlideshow();
 }
 
 imageCanvas.addEventListener("mousedown", event => {
@@ -852,9 +943,16 @@ function isButtonActivation(event) {
 
 document.addEventListener("keydown", event => {
   if (event.defaultPrevented) return;
-  if (isEditableTarget(event.target) || event.metaKey || event.ctrlKey || event.altKey) return;
   const key = event.key;
   const promptOpen = !closePromptEl.hidden;
+
+  if (state.slideshowPlaying) {
+    consumeKey(event);
+    stopSlideshow();
+    return;
+  }
+
+  if (isEditableTarget(event.target) || event.metaKey || event.ctrlKey || event.altKey) return;
 
   if (promptOpen) {
     if (key === "Escape" || key === "q") {
@@ -884,11 +982,12 @@ document.addEventListener("keydown", event => {
   else if ((key === "Backspace" || key === "Delete") && event.shiftKey) { consumeKey(event); clearAllBoxes(); }
   else if (key === "Backspace" || key === "Delete") { consumeKey(event); removeSelectedBox(); }
   else if (key === "s") { consumeKey(event); saveLabels(); }
-  else if (key === "d") { consumeKey(event); markPendingDelete(imageName()); }
+  else if (key === "d") { consumeKey(event); togglePendingDelete(imageName()); }
   else if (!isButtonActivation(event)) consumeKey(event);
 }, true);
 
-rescanBtn.addEventListener("click", () => loadState(state.idx, true));
+playBtn.addEventListener("click", toggleSlideshow);
+rescanBtn.addEventListener("click", () => { stopSlideshow(); loadState(state.idx, true); });
 applyDeletesBtn.addEventListener("click", applyDeletes);
 closeBtn.addEventListener("click", requestClose);
 closeApplyBtn.addEventListener("click", () => closeEditor(true));

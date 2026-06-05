@@ -36,6 +36,11 @@
       cursor: pointer;
     }
     button:disabled { opacity: 0.45; cursor: default; }
+    button.is-active {
+      border-color: #2bd576;
+      background: #18482f;
+      color: #f2fff8;
+    }
     #stage {
       flex: 1 1 auto;
       min-height: 80px;
