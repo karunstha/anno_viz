@@ -18,7 +18,7 @@ Or temporarily visualize a different dataset for one run:
 The dataset directory should contain:
     images/
     labels/
-    classes.txt
+    classes.txt or data.yaml
 
 If the current working directory already contains that layout, annoviz will use it automatically.
 """
@@ -65,12 +65,25 @@ def normalize_dataset_dir(path):
     return path.resolve()
 
 
+def default_classes_file(dataset_dir):
+    dataset_dir = normalize_dataset_dir(dataset_dir)
+    classes_txt = dataset_dir / "classes.txt"
+    if classes_txt.is_file():
+        return classes_txt
+
+    data_yaml = dataset_dir / "data.yaml"
+    if data_yaml.is_file():
+        return data_yaml
+
+    return classes_txt
+
+
 def looks_like_dataset_dir(path):
     dataset_dir = normalize_dataset_dir(path)
     return (
         (dataset_dir / "images").is_dir()
         and (dataset_dir / "labels").is_dir()
-        and (dataset_dir / "classes.txt").is_file()
+        and default_classes_file(dataset_dir).is_file()
     )
 
 
@@ -174,7 +187,7 @@ def main():
     visualize(
         images_dir=args.images_dir or dataset_dir / "images",
         labels_dir=args.labels_dir or dataset_dir / "labels",
-        classes_file=args.classes_file or dataset_dir / "classes.txt",
+        classes_file=args.classes_file or default_classes_file(dataset_dir),
         save_dir=args.save_dir,
         start_index=args.start_index,
         port=args.port,

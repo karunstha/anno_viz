@@ -21,6 +21,8 @@ dataset/
   classes.txt
 ```
 
+You can also use `data.yaml` instead of `classes.txt` for class names.
+
 Labels use standard YOLO text format:
 
 ```text
@@ -83,7 +85,7 @@ If you run `annoviz` inside a folder that already has this layout:
 ```text
 images/
 labels/
-classes.txt
+classes.txt or data.yaml
 ```
 
 Anno Viz will use the current directory as the dataset automatically. No `anno_viz_config` file is needed for that case.
@@ -127,7 +129,7 @@ annoviz -dataset_dir /path/to/other/dataset
 
 ## Optional Paths
 
-Use these when your dataset does not follow the default `images/`, `labels/`, `classes.txt` layout:
+Use these when your dataset does not follow the default `images/`, `labels/`, `classes.txt` or `data.yaml` layout:
 
 ```bash
 annoviz \
@@ -249,7 +251,7 @@ If the editor says the dataset directory is not set, run:
 annoviz --set-dataset-dir /path/to/dataset
 ```
 
-If you are already inside the dataset folder, make sure it contains `images/`, `labels/`, and `classes.txt`. In that case `annoviz` will use the current directory automatically without creating `anno_viz_config`.
+If you are already inside the dataset folder, make sure it contains `images/`, `labels/`, and either `classes.txt` or `data.yaml`. In that case `annoviz` will use the current directory automatically without creating `anno_viz_config`.
 
 If `pywebview` is missing, run:
 

@@ -1,11 +1,63 @@
 from pathlib import Path
+import ast
 
 from .geometry import clamp, normalize_xyxy, xyxy_to_yolo, yolo_to_xyxy
+
+
+def _load_classes_from_data_yaml(classes_file):
+    names = []
+    raw_lines = classes_file.read_text().splitlines()
+
+    for idx, raw in enumerate(raw_lines):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+
+        if not line.startswith("names:"):
+            continue
+
+        remainder = line.split(":", 1)[1].strip()
+        if remainder:
+            try:
+                parsed = ast.literal_eval(remainder)
+            except (SyntaxError, ValueError):
+                return []
+            if isinstance(parsed, dict):
+                return [str(name).strip() for _, name in sorted(parsed.items()) if str(name).strip()]
+            if isinstance(parsed, (list, tuple)):
+                return [str(name).strip() for name in parsed if str(name).strip()]
+            return []
+
+        block_names = []
+        for nested_raw in raw_lines[idx + 1:]:
+            if not nested_raw.strip():
+                continue
+            if not nested_raw.startswith((" ", "\t")):
+                break
+            nested = nested_raw.strip()
+            if nested.startswith("- "):
+                name = nested[2:].strip().strip("'\"")
+                if name:
+                    block_names.append(name)
+                continue
+
+            if ":" in nested:
+                _, value = nested.split(":", 1)
+                name = value.strip().strip("'\"")
+                if name:
+                    block_names.append(name)
+
+        return block_names
+
+    return names
 
 
 def load_classes(classes_file):
     if classes_file is None or not classes_file.exists():
         return []
+
+    if classes_file.suffix.lower() in {".yaml", ".yml"}:
+        return _load_classes_from_data_yaml(classes_file)
 
     names = []
     for raw in classes_file.read_text().splitlines():
