@@ -1,6 +1,7 @@
 from pathlib import Path
 import argparse
 import json
+import os
 
 
 CONFIG_FILE = "anno_viz_config"
@@ -62,7 +63,7 @@ def normalize_dataset_dir(path):
     path = Path(path).expanduser()
     if not path.is_absolute():
         path = Path.cwd() / path
-    return path.resolve()
+    return Path(os.path.abspath(os.fspath(path)))
 
 
 def default_classes_file(dataset_dir):
@@ -87,10 +88,12 @@ def looks_like_dataset_dir(path):
     )
 
 
-def write_workspace_config(config_file, dataset_dir):
+def write_workspace_config(config_file, dataset_dir, last_index=None):
     config = {
         "dataset_dir": str(dataset_dir),
     }
+    if last_index is not None:
+        config["last_index"] = max(0, int(last_index))
     config_file.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
 
 
@@ -102,34 +105,47 @@ def read_dataset_path_text(path_file):
     path = Path(raw_path).expanduser()
     if not path.is_absolute():
         path = path_file.parent / path
-    return path.resolve()
+    return normalize_dataset_dir(path)
 
 
-def read_workspace_dataset_dir(config_file):
+def read_workspace_state(config_file):
+    state = {
+        "dataset_dir": None,
+        "last_index": None,
+    }
+
     if config_file.exists():
         raw_config = config_file.read_text(encoding="utf-8").strip()
         if not raw_config:
-            return None
+            return state
 
         try:
             config = json.loads(raw_config)
         except json.JSONDecodeError:
-            return read_dataset_path_text(config_file)
+            state["dataset_dir"] = read_dataset_path_text(config_file)
+            return state
 
         dataset_dir = config.get("dataset_dir")
-        if not dataset_dir:
-            return None
+        if dataset_dir:
+            path = Path(dataset_dir).expanduser()
+            if not path.is_absolute():
+                path = config_file.parent / path
+            state["dataset_dir"] = normalize_dataset_dir(path)
 
-        path = Path(dataset_dir).expanduser()
-        if not path.is_absolute():
-            path = config_file.parent / path
-        return path.resolve()
+        last_index = config.get("last_index")
+        try:
+            if last_index is not None:
+                state["last_index"] = max(0, int(last_index))
+        except (TypeError, ValueError):
+            state["last_index"] = None
+        return state
 
     legacy_path_file = workspace_legacy_config_file()
     if legacy_path_file.exists():
-        return read_dataset_path_text(legacy_path_file)
+        state["dataset_dir"] = read_dataset_path_text(legacy_path_file)
+        return state
 
-    return None
+    return state
 
 
 def main():
@@ -155,7 +171,7 @@ def main():
     parser.add_argument("--labels-dir", default=None, type=Path)
     parser.add_argument("--classes-file", default=None, type=Path)
     parser.add_argument("--save-dir", default=None, type=Path)
-    parser.add_argument("--start-index", default=0, type=int)
+    parser.add_argument("--start-index", default=None, type=int)
     parser.add_argument("--port", default=0, type=int, help="Local web UI port. Defaults to a free port.")
     parser.add_argument(
         "--browser",
@@ -165,9 +181,10 @@ def main():
 
     args = parser.parse_args()
     config_file = workspace_config_file()
+    workspace_state = read_workspace_state(config_file)
     if args.set_dataset_dir is not None:
         dataset_dir = normalize_dataset_dir(args.set_dataset_dir)
-        write_workspace_config(config_file, dataset_dir)
+        write_workspace_config(config_file, dataset_dir, last_index=0)
         print(f"saved dataset directory to {config_file}: {dataset_dir}")
         legacy_path_file = workspace_legacy_config_file()
         if legacy_path_file.exists():
@@ -175,13 +192,20 @@ def main():
         ensure_config_gitignored(config_file.parent)
         return
 
-    dataset_dir = args.dataset_dir.expanduser() if args.dataset_dir is not None else read_workspace_dataset_dir(config_file)
+    using_saved_workspace_dataset = args.dataset_dir is None and workspace_state["dataset_dir"] is not None
+    dataset_dir = args.dataset_dir.expanduser() if args.dataset_dir is not None else workspace_state["dataset_dir"]
     if dataset_dir is None and looks_like_dataset_dir(Path.cwd()):
         dataset_dir = Path.cwd()
     if dataset_dir is None:
         parser.exit(2, f"error: {DATASET_DIR_INSTRUCTIONS}\n")
 
     dataset_dir = normalize_dataset_dir(dataset_dir)
+    start_index = (
+        args.start_index
+        if args.start_index is not None
+        else ((workspace_state["last_index"] or 0) if using_saved_workspace_dataset else 0)
+    )
+    session_config_file = config_file if using_saved_workspace_dataset else None
     from .web_editor import visualize
 
     visualize(
@@ -189,9 +213,11 @@ def main():
         labels_dir=args.labels_dir or dataset_dir / "labels",
         classes_file=args.classes_file or default_classes_file(dataset_dir),
         save_dir=args.save_dir,
-        start_index=args.start_index,
+        start_index=start_index,
         port=args.port,
         browser=args.browser,
+        session_config_file=session_config_file,
+        session_dataset_dir=dataset_dir if session_config_file is not None else None,
     )
 
 

@@ -1,5 +1,7 @@
 const state = {
-  images: [],
+  imageCount: 0,
+  currentName: "",
+  timelineEntries: [],
   classes: [],
   idx: 0,
   image: new Image(),
@@ -9,14 +11,19 @@ const state = {
   selectedClass: 0,
   addMode: false,
   dirty: false,
+  zoom: 1,
+  panX: 0,
+  panY: 0,
   dragging: false,
   dragAction: null,
   dragHandle: null,
   dragStart: null,
   dragOriginalBox: null,
+  panning: false,
+  panStart: null,
   pendingDeletes: new Set(),
   timelineStart: 0,
-  display: { x: 0, y: 0, w: 0, h: 0 },
+  display: { x: 0, y: 0, w: 0, h: 0, fitScale: 1 },
   timelineRegions: [],
   thumbCache: new Map(),
 };
@@ -43,6 +50,7 @@ const TIMELINE_GAP = 6;
 const TIMELINE_PAD_X = 6;
 const TIMELINE_PAD_Y = 8;
 const TIMELINE_H = 60;
+const THUMB_CACHE_LIMIT = 96;
 
 function clamp(value, lo, hi) {
   return Math.max(lo, Math.min(value, hi));
@@ -62,19 +70,37 @@ function classLabel(clsId) {
 }
 
 function imageName() {
-  return state.images[state.idx]?.name ?? "";
+  return state.currentName;
 }
 
 function imageUrl(name) {
   return `/image/${encodeURIComponent(name)}`;
 }
 
-function labelUrl(name) {
-  return `/api/label?name=${encodeURIComponent(name)}`;
+function imageUrlByIndex(idx) {
+  return `/image-by-idx/${idx}`;
+}
+
+function labelUrlByIndex(idx) {
+  return `/api/label?idx=${idx}`;
 }
 
 function pendingDeleteNames() {
   return [...state.pendingDeletes];
+}
+
+function syncSessionPosition() {
+  return fetch("/api/session", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      index: state.idx,
+      name: imageName(),
+    }),
+    keepalive: true,
+  }).catch(error => {
+    console.error("Could not sync session position", error);
+  });
 }
 
 function syncPendingDeletes() {
@@ -121,7 +147,7 @@ function updateStatus() {
   const selected = state.selectedIdx == null ? "none" : classLabel(state.boxes[state.selectedIdx].cls_id);
   const selectedClass = classLabel(state.selectedClass);
   const pending = state.pendingDeletes.has(imageName()) ? " | pending delete" : "";
-  statusEl.textContent = `${state.idx + 1}/${state.images.length} | ${imageName()} | boxes=${state.boxes.length} | selected=${selected} | add-class=${selectedClass}${pending}`;
+  statusEl.textContent = `${state.idx + 1}/${state.imageCount} | ${imageName()} | boxes=${state.boxes.length} | selected=${selected} | add-class=${selectedClass}${pending}`;
   applyDeletesBtn.disabled = state.pendingDeletes.size === 0;
 }
 
@@ -148,14 +174,22 @@ function fitImage() {
   const canvasH = imageCanvas.clientHeight;
   const imgW = state.image.naturalWidth || 1;
   const imgH = state.image.naturalHeight || 1;
-  const scale = Math.min(canvasW / imgW, canvasH / imgH);
+  const fitScale = Math.min(canvasW / imgW, canvasH / imgH);
+  const scale = fitScale * state.zoom;
   const w = Math.max(1, Math.round(imgW * scale));
   const h = Math.max(1, Math.round(imgH * scale));
+  const centeredX = Math.floor((canvasW - w) / 2);
+  const centeredY = Math.floor((canvasH - h) / 2);
+  const maxPanX = Math.max(0, Math.floor((w - canvasW) / 2));
+  const maxPanY = Math.max(0, Math.floor((h - canvasH) / 2));
+  state.panX = clamp(state.panX, -maxPanX, maxPanX);
+  state.panY = clamp(state.panY, -maxPanY, maxPanY);
   state.display = {
-    x: Math.max(0, Math.floor((canvasW - w) / 2)),
-    y: Math.max(0, Math.floor((canvasH - h) / 2)),
+    x: centeredX + state.panX,
+    y: centeredY + state.panY,
     w,
     h,
+    fitScale,
   };
 }
 
@@ -173,6 +207,39 @@ function canvasToImage(x, y) {
     x: clamp(Math.round((x - d.x) * state.image.naturalWidth / d.w), 0, state.image.naturalWidth - 1),
     y: clamp(Math.round((y - d.y) * state.image.naturalHeight / d.h), 0, state.image.naturalHeight - 1),
   };
+}
+
+function resetZoom() {
+  state.zoom = 1;
+  state.panX = 0;
+  state.panY = 0;
+}
+
+function zoomAt(canvasX, canvasY, delta) {
+  if (!state.imageLoaded) return;
+  fitImage();
+  const before = canvasToImage(canvasX, canvasY) ?? {
+    x: state.image.naturalWidth / 2,
+    y: state.image.naturalHeight / 2,
+  };
+  const prevZoom = state.zoom;
+  const nextZoom = clamp(Number((prevZoom * delta).toFixed(4)), 1, 12);
+  if (nextZoom === prevZoom) return;
+  state.zoom = nextZoom;
+
+  const canvasW = imageCanvas.clientWidth;
+  const canvasH = imageCanvas.clientHeight;
+  const imgW = state.image.naturalWidth || 1;
+  const imgH = state.image.naturalHeight || 1;
+  const fitScale = Math.min(canvasW / imgW, canvasH / imgH);
+  const scaledW = Math.max(1, Math.round(imgW * fitScale * state.zoom));
+  const scaledH = Math.max(1, Math.round(imgH * fitScale * state.zoom));
+  const centeredX = Math.floor((canvasW - scaledW) / 2);
+  const centeredY = Math.floor((canvasH - scaledH) / 2);
+  state.panX = Math.round(canvasX - centeredX - before.x * scaledW / imgW);
+  state.panY = Math.round(canvasY - centeredY - before.y * scaledH / imgH);
+  fitImage();
+  draw();
 }
 
 function colorFor(clsId) {
@@ -268,7 +335,13 @@ function drawImageCanvas() {
     }
   }
 
-  drawTextWithBg(imageCtx, `Mode: ${state.addMode ? "ADD" : "EDIT"}${state.dirty ? " *unsaved" : ""}`, 12, h - 14, "#fff");
+  drawTextWithBg(
+    imageCtx,
+    `Mode: ${state.addMode ? "ADD" : "EDIT"}${state.dirty ? " *unsaved" : ""} | Zoom: ${state.zoom.toFixed(1)}x`,
+    12,
+    h - 14,
+    "#fff",
+  );
 }
 
 function drawSubjectCrop(ctx, box, canvasW, canvasH, selected) {
@@ -356,23 +429,23 @@ function timelineCapacity() {
 }
 
 function ensureTimelineVisible() {
-  if (!state.images.length) {
+  if (!state.imageCount) {
     state.timelineStart = 0;
     return;
   }
   const capacity = timelineCapacity();
-  const maxStart = Math.max(0, state.images.length - capacity);
+  const maxStart = Math.max(0, state.imageCount - capacity);
   if (state.idx < state.timelineStart) state.timelineStart = state.idx;
   else if (state.idx >= state.timelineStart + capacity) state.timelineStart = state.idx - capacity + 1;
   state.timelineStart = clamp(state.timelineStart, 0, maxStart);
 }
 
-function timelineIndices() {
+async function loadTimeline() {
   ensureTimelineVisible();
-  const end = Math.min(state.images.length, state.timelineStart + timelineCapacity());
-  const indices = [];
-  for (let i = state.timelineStart; i < end; i++) indices.push(i);
-  return indices;
+  const resp = await fetch(`/api/timeline?start=${state.timelineStart}&count=${timelineCapacity()}`);
+  const data = await resp.json();
+  state.timelineEntries = data.entries ?? [];
+  state.imageCount = data.totalImages ?? state.imageCount;
 }
 
 function drawTimeline() {
@@ -393,10 +466,10 @@ function drawTimeline() {
   const drawY1 = y1 + TIMELINE_PAD_Y;
   const drawY2 = y2 - TIMELINE_PAD_Y;
 
-  for (const idx of timelineIndices()) {
-    const name = state.images[idx].name;
-    const slot = { x: drawX, y: drawY1, w: TIMELINE_SLOT_W, h: drawY2 - drawY1, idx };
-    const isPendingDelete = state.pendingDeletes.has(name);
+  for (const entry of state.timelineEntries) {
+    const name = entry.name;
+    const slot = { x: drawX, y: drawY1, w: TIMELINE_SLOT_W, h: drawY2 - drawY1, idx: entry.idx };
+    const isPendingDelete = entry.pendingDelete || state.pendingDeletes.has(name);
     timelineCtx.fillStyle = isPendingDelete ? DELETE_MARK_COLOR : "#505050";
     timelineCtx.fillRect(slot.x, slot.y, slot.w, slot.h);
 
@@ -405,6 +478,9 @@ function drawTimeline() {
       img = new Image();
       img.onload = () => drawTimeline();
       img.src = imageUrl(name);
+      state.thumbCache.set(name, img);
+    } else {
+      state.thumbCache.delete(name);
       state.thumbCache.set(name, img);
     }
 
@@ -420,7 +496,7 @@ function drawTimeline() {
       timelineCtx.lineWidth = 1;
     }
 
-    if (idx === state.idx) {
+    if (entry.idx === state.idx) {
       timelineCtx.strokeStyle = "#00c8ff";
       timelineCtx.lineWidth = 2;
       timelineCtx.strokeRect(slot.x - 1, slot.y - 1, slot.w + 2, slot.h + 2);
@@ -429,6 +505,12 @@ function drawTimeline() {
 
     state.timelineRegions.push(slot);
     drawX += TIMELINE_SLOT_W + TIMELINE_GAP;
+  }
+
+  while (state.thumbCache.size > THUMB_CACHE_LIMIT) {
+    const oldestKey = state.thumbCache.keys().next().value;
+    if (oldestKey == null) break;
+    state.thumbCache.delete(oldestKey);
   }
 }
 
@@ -462,41 +544,58 @@ function parseYolo(raw) {
 }
 
 async function loadIndex(idx) {
-  if (!state.images.length) return;
-  state.idx = ((idx % state.images.length) + state.images.length) % state.images.length;
+  const requestedIdx = state.imageCount ? ((idx % state.imageCount) + state.imageCount) % state.imageCount : Math.max(0, idx);
   state.imageLoaded = false;
   state.selectedIdx = null;
   state.dirty = false;
-  const name = imageName();
-  const labelPromise = fetch(labelUrl(name)).then(r => r.text());
+  resetZoom();
+  const stateResp = await fetch(`/api/state?idx=${requestedIdx}`);
+  const stateData = await stateResp.json();
+  state.imageCount = stateData.totalImages ?? 0;
+  state.classes = stateData.classes ?? state.classes;
+  state.pendingDeletes = new Set(stateData.pendingDeletes ?? []);
+  if (!state.imageCount || stateData.currentName == null) {
+    state.idx = 0;
+    state.currentName = "";
+    state.boxes = [];
+    state.timelineEntries = [];
+    statusEl.textContent = "No images found.";
+    draw();
+    return;
+  }
+  state.idx = stateData.currentIndex ?? requestedIdx;
+  state.currentName = stateData.currentName;
+  const labelPromise = fetch(labelUrlByIndex(state.idx)).then(r => r.text());
   state.image = new Image();
   await new Promise((resolve, reject) => {
     state.image.onload = resolve;
     state.image.onerror = reject;
-    state.image.src = `${imageUrl(name)}?t=${Date.now()}`;
+    state.image.src = `${imageUrlByIndex(state.idx)}?t=${Date.now()}`;
   });
   state.imageLoaded = true;
   const raw = await labelPromise;
   state.boxes = parseYolo(raw);
   state.selectedIdx = state.boxes.length ? 0 : null;
+  syncSessionPosition();
   ensureTimelineVisible();
+  await loadTimeline();
   draw();
 }
 
-async function loadState(startIndex = 0) {
-  const resp = await fetch("/api/state");
-  const data = await resp.json();
-  state.images = data.images;
-  state.classes = data.classes;
+async function loadState(startIndex = 0, refresh = false) {
   state.thumbCache.clear();
   state.selectedClass = 0;
-  const validNames = new Set(state.images.map(img => img.name));
-  state.pendingDeletes = new Set((data.pendingDeletes ?? []).filter(name => validNames.has(name)));
-  if (!state.images.length) {
-    statusEl.textContent = "No images found.";
-    return;
+  state.timelineEntries = [];
+  if (refresh) {
+    const resp = await fetch(`/api/state?idx=${Math.max(0, startIndex)}&refresh=1`);
+    const data = await resp.json();
+    state.imageCount = data.totalImages ?? 0;
+    state.classes = data.classes ?? state.classes;
+    state.pendingDeletes = new Set(data.pendingDeletes ?? []);
+  } else {
+    state.imageCount = 0;
   }
-  await loadIndex(Math.min(startIndex, state.images.length - 1));
+  await loadIndex(startIndex);
 }
 
 async function saveLabels() {
@@ -523,7 +622,7 @@ async function applyDeletes() {
     body: JSON.stringify({ names: pendingDeleteNames() }),
   });
   state.pendingDeletes.clear();
-  await loadState(Math.min(state.idx, Math.max(0, state.images.length - 1)));
+  await loadState(Math.max(0, state.idx), true);
 }
 
 async function requestClose() {
@@ -593,6 +692,19 @@ function cycleSelection(delta) {
 }
 
 imageCanvas.addEventListener("mousedown", event => {
+  if (event.button === 1 || event.button === 2) {
+    event.preventDefault();
+    state.panning = true;
+    state.panStart = {
+      x: event.clientX,
+      y: event.clientY,
+      panX: state.panX,
+      panY: state.panY,
+    };
+    return;
+  }
+
+  if (event.button !== 0) return;
   const point = canvasToImage(event.offsetX, event.offsetY);
   if (!point) return;
 
@@ -625,6 +737,13 @@ imageCanvas.addEventListener("mousedown", event => {
 });
 
 imageCanvas.addEventListener("mousemove", event => {
+  if (state.panning && state.panStart) {
+    state.panX = state.panStart.panX + (event.clientX - state.panStart.x);
+    state.panY = state.panStart.panY + (event.clientY - state.panStart.y);
+    draw();
+    return;
+  }
+
   if (!state.dragging || state.selectedIdx == null) return;
   const point = canvasToImage(event.offsetX, event.offsetY);
   if (!point) return;
@@ -660,7 +779,9 @@ imageCanvas.addEventListener("mousemove", event => {
   draw();
 });
 
-imageCanvas.addEventListener("mouseup", () => {
+function endImageInteraction() {
+  state.panning = false;
+  state.panStart = null;
   if (state.dragAction === "new" && state.selectedIdx != null) {
     const box = normalizeBox(state.boxes[state.selectedIdx]);
     if (box.x2 - box.x1 < 5 || box.y2 - box.y1 < 5) {
@@ -675,12 +796,26 @@ imageCanvas.addEventListener("mouseup", () => {
   state.dragHandle = null;
   state.dragOriginalBox = null;
   draw();
+}
+
+imageCanvas.addEventListener("mouseup", endImageInteraction);
+imageCanvas.addEventListener("contextmenu", event => event.preventDefault());
+imageCanvas.addEventListener("wheel", event => {
+  event.preventDefault();
+  zoomAt(event.offsetX, event.offsetY, event.deltaY < 0 ? 1.12 : 1 / 1.12);
+}, { passive: false });
+imageCanvas.addEventListener("dblclick", () => {
+  resetZoom();
+  draw();
+});
+window.addEventListener("mouseup", () => {
+  if (state.panning || state.dragging) endImageInteraction();
 });
 
 timelineCanvas.addEventListener("mousedown", event => {
   const region = state.timelineRegions.find(r => event.offsetX >= r.x && event.offsetX <= r.x + r.w && event.offsetY >= r.y && event.offsetY <= r.y + r.h);
   if (!region) return;
-  const name = state.images[region.idx].name;
+  const name = state.timelineEntries.find(entry => entry.idx === region.idx)?.name ?? "";
   if (state.pendingDeletes.has(name)) {
     clearPendingDelete(name);
   } else {
@@ -692,9 +827,9 @@ timelineCanvas.addEventListener("wheel", event => {
   event.preventDefault();
   const step = event.deltaY > 0 ? 1 : -1;
   state.timelineStart += step * 3;
-  const maxStart = Math.max(0, state.images.length - timelineCapacity());
+  const maxStart = Math.max(0, state.imageCount - timelineCapacity());
   state.timelineStart = clamp(state.timelineStart, 0, maxStart);
-  drawTimeline();
+  loadTimeline().then(drawTimeline);
 }, { passive: false });
 
 window.addEventListener("resize", resizeCanvases);
@@ -737,6 +872,9 @@ document.addEventListener("keydown", event => {
   else if (key === "c") { consumeKey(event); loadIndex(state.idx - 5); }
   else if (key === "v") { consumeKey(event); loadIndex(state.idx + 2); }
   else if (key === "x") { consumeKey(event); loadIndex(state.idx - 10); }
+  else if (key === "z") { consumeKey(event); zoomAt(imageCanvas.clientWidth / 2, imageCanvas.clientHeight / 2, 1.12); }
+  else if (key === "Z") { consumeKey(event); zoomAt(imageCanvas.clientWidth / 2, imageCanvas.clientHeight / 2, 1 / 1.12); }
+  else if (key === "r") { consumeKey(event); resetZoom(); draw(); }
   else if (key === "a") { consumeKey(event); state.addMode = !state.addMode; draw(); }
   else if (key === "Tab" || key === "]") { consumeKey(event); cycleSelection(1); }
   else if (key === "[") { consumeKey(event); cycleSelection(-1); }
@@ -750,7 +888,7 @@ document.addEventListener("keydown", event => {
   else if (!isButtonActivation(event)) consumeKey(event);
 }, true);
 
-rescanBtn.addEventListener("click", () => loadState(state.idx));
+rescanBtn.addEventListener("click", () => loadState(state.idx, true));
 applyDeletesBtn.addEventListener("click", applyDeletes);
 closeBtn.addEventListener("click", requestClose);
 closeApplyBtn.addEventListener("click", () => closeEditor(true));

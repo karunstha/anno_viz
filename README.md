@@ -98,6 +98,8 @@ annoviz --set-dataset-dir /path/to/dataset
 
 This creates a local workspace config file named `anno_viz_config`. It is ignored by git, so each workspace can point at its own dataset.
 
+When you use a saved workspace dataset, Anno Viz also remembers the last image index you were viewing and resumes from there on the next launch.
+
 You can also use the underscore alias:
 
 ```bash
@@ -237,7 +239,8 @@ It stores JSON like:
 
 ```json
 {
-  "dataset_dir": "/path/to/dataset"
+  "dataset_dir": "/path/to/dataset",
+  "last_index": 42
 }
 ```
 
