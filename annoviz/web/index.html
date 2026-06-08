@@ -9,24 +9,71 @@
 <body>
   <header>
     <div id="status">Loading...</div>
-    <button id="playBtn" type="button">Play</button>
-    <button id="slideshowDirectionBtn" type="button" title="Slideshow direction: right" aria-label="Slideshow direction: right">&gt;</button>
-    <label for="slideshowMultiplier" class="sr-only">Speed</label>
-    <select id="slideshowMultiplier" aria-label="Slideshow speed multiplier">
-      <option value="0.25">0.25x</option>
-      <option value="0.5">0.5x</option>
-      <option value="0.75">0.75x</option>
-      <option value="1" selected>1x</option>
-      <option value="1.25">1.25x</option>
-      <option value="1.5">1.5x</option>
-      <option value="1.75">1.75x</option>
-      <option value="2">2x</option>
-      <option value="3">3x</option>
-      <option value="4">4x</option>
-    </select>
-    <button id="rescanBtn" type="button">Rescan</button>
-    <button id="applyDeletesBtn" type="button" disabled>Apply Deletes</button>
-    <button id="closeBtn" type="button">Close</button>
+    <nav class="menuBar" aria-label="Editor controls">
+      <details class="menuGroup">
+        <summary>Navigate</summary>
+        <div class="menuPanel">
+          <button id="prevBtn" type="button">Previous</button>
+          <button id="nextBtn" type="button">Next</button>
+        </div>
+      </details>
+      <details class="menuGroup">
+        <summary>Annotate</summary>
+        <div class="menuPanel">
+          <button id="addModeBtn" type="button">Add Mode</button>
+          <button id="saveBtn" type="button">Save Labels</button>
+          <button id="removeBoxBtn" type="button">Remove Box</button>
+          <button id="clearBoxesBtn" type="button">Clear Boxes</button>
+        </div>
+      </details>
+      <details class="menuGroup">
+        <summary>View</summary>
+        <div class="menuPanel">
+          <button id="resetZoomBtn" type="button">Reset View</button>
+          <button id="zoomInBtn" type="button">Zoom In</button>
+          <button id="zoomOutBtn" type="button">Zoom Out</button>
+          <button id="annotationVisibilityBtn" type="button">Hide Annotations</button>
+          <button id="trainingSizeBtn" type="button">Training Size</button>
+          <div class="menuFieldGrid" aria-label="Training preview size">
+            <label for="trainingWidthInput">Width</label>
+            <label for="trainingHeightInput">Height</label>
+            <input id="trainingWidthInput" type="number" min="1" step="1" value="320" inputmode="numeric">
+            <input id="trainingHeightInput" type="number" min="1" step="1" value="320" inputmode="numeric">
+          </div>
+        </div>
+      </details>
+      <details class="menuGroup menuAlignRight">
+        <summary>Slideshow</summary>
+        <div class="menuPanel">
+          <button id="playBtn" type="button">Play</button>
+          <div class="menuRow">
+            <button id="slideshowDirectionBtn" type="button" title="Slideshow direction: right" aria-label="Slideshow direction: right">&gt;</button>
+            <label for="slideshowMultiplier" class="sr-only">Speed</label>
+            <select id="slideshowMultiplier" aria-label="Slideshow speed multiplier">
+              <option value="0.25">0.25x</option>
+              <option value="0.5">0.5x</option>
+              <option value="0.75">0.75x</option>
+              <option value="1" selected>1x</option>
+              <option value="1.25">1.25x</option>
+              <option value="1.5">1.5x</option>
+              <option value="1.75">1.75x</option>
+              <option value="2">2x</option>
+              <option value="3">3x</option>
+              <option value="4">4x</option>
+            </select>
+          </div>
+        </div>
+      </details>
+      <details class="menuGroup menuAlignRight">
+        <summary>Dataset</summary>
+        <div class="menuPanel">
+          <button id="markDeleteBtn" type="button">Mark Delete</button>
+          <button id="applyDeletesBtn" type="button" disabled>Apply Deletes</button>
+          <button id="rescanBtn" type="button">Rescan</button>
+        </div>
+      </details>
+      <button id="closeBtn" class="menuClose" type="button">Close</button>
+    </nav>
   </header>
   <main id="stage">
     <section id="imagePane">

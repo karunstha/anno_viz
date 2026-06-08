@@ -30,6 +30,10 @@ const state = {
   slideshowTimer: null,
   slideshowDelayMs: 500,
   slideshowDirection: 1,
+  annotationsVisible: true,
+  trainingSizeEnabled: false,
+  trainingWidth: 320,
+  trainingHeight: 320,
 };
 
 const imageCanvas = document.getElementById("imageCanvas");
@@ -38,8 +42,24 @@ const timelineCanvas = document.getElementById("timelineCanvas");
 const timelineCtx = timelineCanvas.getContext("2d");
 const statusEl = document.getElementById("status");
 const subjectListEl = document.getElementById("subjectList");
+const menuGroups = [...document.querySelectorAll(".menuGroup")];
+const prevBtn = document.getElementById("prevBtn");
+const nextBtn = document.getElementById("nextBtn");
+const addModeBtn = document.getElementById("addModeBtn");
+const saveBtn = document.getElementById("saveBtn");
+const removeBoxBtn = document.getElementById("removeBoxBtn");
+const clearBoxesBtn = document.getElementById("clearBoxesBtn");
+const resetZoomBtn = document.getElementById("resetZoomBtn");
+const zoomInBtn = document.getElementById("zoomInBtn");
+const zoomOutBtn = document.getElementById("zoomOutBtn");
+const annotationVisibilityBtn = document.getElementById("annotationVisibilityBtn");
+const trainingSizeBtn = document.getElementById("trainingSizeBtn");
+const trainingWidthInput = document.getElementById("trainingWidthInput");
+const trainingHeightInput = document.getElementById("trainingHeightInput");
 const playBtn = document.getElementById("playBtn");
 const slideshowDirectionBtn = document.getElementById("slideshowDirectionBtn");
+const slideshowMultiplierEl = document.getElementById("slideshowMultiplier");
+const markDeleteBtn = document.getElementById("markDeleteBtn");
 const rescanBtn = document.getElementById("rescanBtn");
 const applyDeletesBtn = document.getElementById("applyDeletesBtn");
 const closeBtn = document.getElementById("closeBtn");
@@ -60,9 +80,31 @@ const TIMELINE_PAD_X = 6;
 const TIMELINE_PAD_Y = 8;
 const TIMELINE_H = 60;
 const THUMB_CACHE_LIMIT = 96;
+const TRAINING_SIZE_MAX = 16384;
 
 function clamp(value, lo, hi) {
   return Math.max(lo, Math.min(value, hi));
+}
+
+function positiveInt(value, fallback) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed < 1) return fallback;
+  return clamp(parsed, 1, TRAINING_SIZE_MAX);
+}
+
+function previewDimensions() {
+  if (state.trainingSizeEnabled) {
+    return {
+      width: state.trainingWidth,
+      height: state.trainingHeight,
+      actualSize: true,
+    };
+  }
+  return {
+    width: state.image.naturalWidth || 1,
+    height: state.image.naturalHeight || 1,
+    actualSize: false,
+  };
 }
 
 function normalizeBox(box) {
@@ -146,6 +188,16 @@ function togglePendingDelete(name) {
   else markPendingDelete(name);
 }
 
+function closeMenus(except = null) {
+  menuGroups.forEach(group => {
+    if (group !== except) group.open = false;
+  });
+}
+
+function hasOpenMenu() {
+  return menuGroups.some(group => group.open);
+}
+
 function closePromptMessage() {
   const count = state.pendingDeletes.size;
   const noun = count === 1 ? "image" : "images";
@@ -168,15 +220,42 @@ function updateStatus() {
   const pending = isCurrentPendingDelete() ? " | pending delete" : "";
   const directionName = state.slideshowDirection > 0 ? "right" : "left";
   const playing = state.slideshowPlaying ? ` | playing ${directionName} ${state.slideshowDelayMs}ms` : "";
-  statusEl.textContent = `${state.idx + 1}/${state.imageCount} | ${imageName()} | boxes=${state.boxes.length} | selected=${selected} | add-class=${selectedClass}${pending}${playing}`;
-  playBtn.disabled = state.imageCount === 0;
+  const annotations = state.annotationsVisible ? "" : " | annotations hidden";
+  const training = state.trainingSizeEnabled ? ` | training ${state.trainingWidth}x${state.trainingHeight}` : "";
+  const noImages = state.imageCount === 0;
+  const noImageLoaded = noImages || !state.imageLoaded;
+  statusEl.textContent = `${state.idx + 1}/${state.imageCount} | ${imageName()} | boxes=${state.boxes.length} | selected=${selected} | add-class=${selectedClass}${pending}${playing}${annotations}${training}`;
+  prevBtn.disabled = noImages;
+  nextBtn.disabled = noImages;
+  addModeBtn.disabled = noImageLoaded || !state.annotationsVisible;
+  addModeBtn.classList.toggle("is-active", state.addMode);
+  saveBtn.disabled = noImageLoaded || !state.dirty;
+  removeBoxBtn.disabled = state.selectedIdx == null;
+  clearBoxesBtn.disabled = !state.boxes.length;
+  resetZoomBtn.disabled = noImageLoaded;
+  zoomInBtn.disabled = noImageLoaded;
+  zoomOutBtn.disabled = noImageLoaded;
+  annotationVisibilityBtn.disabled = noImageLoaded;
+  annotationVisibilityBtn.textContent = state.annotationsVisible ? "Hide Annotations" : "Show Annotations";
+  annotationVisibilityBtn.classList.toggle("is-active", state.annotationsVisible);
+  trainingSizeBtn.disabled = noImageLoaded;
+  trainingSizeBtn.textContent = state.trainingSizeEnabled ? "Training Size On" : "Training Size Off";
+  trainingSizeBtn.classList.toggle("is-active", state.trainingSizeEnabled);
+  trainingWidthInput.value = String(state.trainingWidth);
+  trainingHeightInput.value = String(state.trainingHeight);
+  playBtn.disabled = noImages;
   playBtn.textContent = state.slideshowPlaying ? "Stop" : "Play";
   playBtn.classList.toggle("is-active", state.slideshowPlaying);
-  slideshowDirectionBtn.disabled = state.imageCount === 0;
+  slideshowDirectionBtn.disabled = noImages;
   slideshowDirectionBtn.textContent = state.slideshowDirection > 0 ? ">" : "<";
   slideshowDirectionBtn.title = `Slideshow direction: ${directionName}`;
   slideshowDirectionBtn.setAttribute("aria-label", `Slideshow direction: ${directionName}`);
   slideshowDirectionBtn.setAttribute("aria-pressed", state.slideshowDirection < 0 ? "true" : "false");
+  slideshowMultiplierEl.disabled = noImages;
+  markDeleteBtn.disabled = noImages || !imageName();
+  markDeleteBtn.textContent = isCurrentPendingDelete() ? "Unmark Delete" : "Mark Delete";
+  markDeleteBtn.classList.toggle("is-active", isCurrentPendingDelete());
+  rescanBtn.disabled = state.slideshowPlaying;
   applyDeletesBtn.disabled = state.pendingDeletes.size === 0;
 }
 
@@ -201,9 +280,12 @@ function resizeCanvases() {
 function fitImage() {
   const canvasW = imageCanvas.clientWidth;
   const canvasH = imageCanvas.clientHeight;
-  const imgW = state.image.naturalWidth || 1;
-  const imgH = state.image.naturalHeight || 1;
-  const fitScale = Math.min(canvasW / imgW, canvasH / imgH);
+  const preview = previewDimensions();
+  const imgW = preview.width;
+  const imgH = preview.height;
+  const fitScale = preview.actualSize
+    ? Math.min(1, canvasW / imgW, canvasH / imgH)
+    : Math.min(canvasW / imgW, canvasH / imgH);
   const scale = fitScale * state.zoom;
   const w = Math.max(1, Math.round(imgW * scale));
   const h = Math.max(1, Math.round(imgH * scale));
@@ -258,15 +340,18 @@ function zoomAt(canvasX, canvasY, delta) {
 
   const canvasW = imageCanvas.clientWidth;
   const canvasH = imageCanvas.clientHeight;
-  const imgW = state.image.naturalWidth || 1;
-  const imgH = state.image.naturalHeight || 1;
-  const fitScale = Math.min(canvasW / imgW, canvasH / imgH);
+  const preview = previewDimensions();
+  const imgW = preview.width;
+  const imgH = preview.height;
+  const fitScale = preview.actualSize
+    ? Math.min(1, canvasW / imgW, canvasH / imgH)
+    : Math.min(canvasW / imgW, canvasH / imgH);
   const scaledW = Math.max(1, Math.round(imgW * fitScale * state.zoom));
   const scaledH = Math.max(1, Math.round(imgH * fitScale * state.zoom));
   const centeredX = Math.floor((canvasW - scaledW) / 2);
   const centeredY = Math.floor((canvasH - scaledH) / 2);
-  state.panX = Math.round(canvasX - centeredX - before.x * scaledW / imgW);
-  state.panY = Math.round(canvasY - centeredY - before.y * scaledH / imgH);
+  state.panX = Math.round(canvasX - centeredX - before.x * scaledW / state.image.naturalWidth);
+  state.panY = Math.round(canvasY - centeredY - before.y * scaledH / state.image.naturalHeight);
   fitImage();
   draw();
 }
@@ -359,30 +444,32 @@ function drawImageCanvas() {
     imageCtx.strokeRect(d.x + 2, d.y + 2, Math.max(0, d.w - 4), Math.max(0, d.h - 4));
   }
 
-  for (let i = 0; i < state.boxes.length; i++) {
-    const b = normalizeBox(state.boxes[i]);
-    const p1 = imageToCanvas(b.x1, b.y1);
-    const p2 = imageToCanvas(b.x2, b.y2);
-    const color = colorFor(b.cls_id);
-    imageCtx.strokeStyle = color;
-    imageCtx.lineWidth = i === state.selectedIdx ? 3 : 2;
-    imageCtx.strokeRect(p1.x, p1.y, p2.x - p1.x, p2.y - p1.y);
-    drawTextWithBg(imageCtx, classLabel(b.cls_id), p1.x, Math.max(20, p1.y - 6), color);
+  if (state.annotationsVisible) {
+    for (let i = 0; i < state.boxes.length; i++) {
+      const b = normalizeBox(state.boxes[i]);
+      const p1 = imageToCanvas(b.x1, b.y1);
+      const p2 = imageToCanvas(b.x2, b.y2);
+      const color = colorFor(b.cls_id);
+      imageCtx.strokeStyle = color;
+      imageCtx.lineWidth = i === state.selectedIdx ? 3 : 2;
+      imageCtx.strokeRect(p1.x, p1.y, p2.x - p1.x, p2.y - p1.y);
+      drawTextWithBg(imageCtx, classLabel(b.cls_id), p1.x, Math.max(20, p1.y - 6), color);
 
-    if (i === state.selectedIdx) {
-      imageCtx.fillStyle = "#fff";
-      imageCtx.strokeStyle = "#000";
-      for (const [px, py] of Object.values(handlePoints(b))) {
-        const hp = imageToCanvas(px, py);
-        imageCtx.fillRect(hp.x - 4, hp.y - 4, 8, 8);
-        imageCtx.strokeRect(hp.x - 4, hp.y - 4, 8, 8);
+      if (i === state.selectedIdx) {
+        imageCtx.fillStyle = "#fff";
+        imageCtx.strokeStyle = "#000";
+        for (const [px, py] of Object.values(handlePoints(b))) {
+          const hp = imageToCanvas(px, py);
+          imageCtx.fillRect(hp.x - 4, hp.y - 4, 8, 8);
+          imageCtx.strokeRect(hp.x - 4, hp.y - 4, 8, 8);
+        }
       }
     }
   }
 
   drawTextWithBg(
     imageCtx,
-    `Mode: ${state.addMode ? "ADD" : "EDIT"}${state.dirty ? " *unsaved" : ""} | Zoom: ${state.zoom.toFixed(1)}x`,
+    `Mode: ${state.addMode ? "ADD" : "EDIT"}${state.dirty ? " *unsaved" : ""} | Zoom: ${state.zoom.toFixed(1)}x${state.annotationsVisible ? "" : " | Annotations hidden"}${state.trainingSizeEnabled ? ` | Training: ${state.trainingWidth}x${state.trainingHeight}` : ""}`,
     12,
     h - 14,
     "#fff",
@@ -680,6 +767,7 @@ async function applyDeletes() {
 
 async function requestClose() {
   stopSlideshow();
+  closeMenus();
   await syncPendingDeletes();
   if (state.pendingDeletes.size) {
     showClosePrompt();
@@ -755,9 +843,8 @@ function configuredSlideshowDelayMs() {
 }
 
 function slideshowMultiplier() {
-  const el = document.getElementById("slideshowMultiplier");
-  if (!el) return 1;
-  const v = Number.parseFloat(el.value);
+  if (!slideshowMultiplierEl) return 1;
+  const v = Number.parseFloat(slideshowMultiplierEl.value);
   return Number.isFinite(v) && v > 0 ? v : 1;
 }
 
@@ -805,6 +892,81 @@ function toggleSlideshowDirection() {
   updateStatus();
 }
 
+function loadRelativeIndex(delta) {
+  stopSlideshow();
+  return loadIndex(state.idx + delta);
+}
+
+function toggleAddMode() {
+  if (!state.annotationsVisible) return;
+  stopSlideshow();
+  state.addMode = !state.addMode;
+  draw();
+}
+
+function resetView() {
+  stopSlideshow();
+  resetZoom();
+  draw();
+}
+
+function zoomFromCenter(delta) {
+  stopSlideshow();
+  zoomAt(imageCanvas.clientWidth / 2, imageCanvas.clientHeight / 2, delta);
+}
+
+function toggleAnnotationsVisible() {
+  stopSlideshow();
+  state.annotationsVisible = !state.annotationsVisible;
+  if (!state.annotationsVisible) {
+    state.addMode = false;
+    state.dragging = false;
+    state.dragAction = null;
+    state.dragHandle = null;
+    state.dragOriginalBox = null;
+  }
+  draw();
+}
+
+function applyTrainingSizeInputs(drawAfter = true) {
+  const nextWidth = positiveInt(trainingWidthInput.value, state.trainingWidth);
+  const nextHeight = positiveInt(trainingHeightInput.value, state.trainingHeight);
+  const changed = nextWidth !== state.trainingWidth || nextHeight !== state.trainingHeight;
+  state.trainingWidth = nextWidth;
+  state.trainingHeight = nextHeight;
+  trainingWidthInput.value = String(state.trainingWidth);
+  trainingHeightInput.value = String(state.trainingHeight);
+
+  if (changed && state.trainingSizeEnabled) resetZoom();
+  if (drawAfter) draw();
+}
+
+function toggleTrainingSize() {
+  stopSlideshow();
+  applyTrainingSizeInputs(false);
+  state.trainingSizeEnabled = !state.trainingSizeEnabled;
+  resetZoom();
+  draw();
+}
+
+function toggleCurrentPendingDelete() {
+  stopSlideshow();
+  togglePendingDelete(imageName());
+}
+
+function rescanDataset() {
+  stopSlideshow();
+  return loadState(state.idx, true);
+}
+
+function runMenuAction(action) {
+  closeMenus();
+  const result = action();
+  if (result && typeof result.catch === "function") {
+    result.catch(error => console.error("Menu action failed", error));
+  }
+}
+
 imageCanvas.addEventListener("mousedown", event => {
   if (event.button === 1 || event.button === 2) {
     event.preventDefault();
@@ -821,6 +983,7 @@ imageCanvas.addEventListener("mousedown", event => {
   if (event.button !== 0) return;
   const point = canvasToImage(event.offsetX, event.offsetY);
   if (!point) return;
+  if (!state.annotationsVisible) return;
 
   state.dragging = true;
   state.dragStart = point;
@@ -961,7 +1124,10 @@ function isEditableTarget(target) {
 }
 
 function isButtonActivation(event) {
-  return event.target instanceof HTMLButtonElement && (event.key === "Enter" || event.key === " ");
+  const target = event.target;
+  const isSummary = target instanceof HTMLElement && target.tagName === "SUMMARY";
+  return (target instanceof HTMLButtonElement || isSummary) &&
+    (event.key === "Enter" || event.key === " ");
 }
 
 document.addEventListener("keydown", event => {
@@ -977,6 +1143,12 @@ document.addEventListener("keydown", event => {
 
   if (isEditableTarget(event.target) || event.metaKey || event.ctrlKey || event.altKey) return;
 
+  if (hasOpenMenu() && key === "Escape") {
+    consumeKey(event);
+    closeMenus();
+    return;
+  }
+
   if (promptOpen) {
     if (key === "Escape" || key === "q") {
       consumeKey(event);
@@ -988,15 +1160,15 @@ document.addEventListener("keydown", event => {
   }
 
   if (key === "q" || key === "Escape") { consumeKey(event); requestClose(); }
-  else if (key === "n" || key === "ArrowRight") { consumeKey(event); loadIndex(state.idx + 1); }
-  else if (key === "b" || key === "ArrowLeft") { consumeKey(event); loadIndex(state.idx - 1); }
-  else if (key === "c") { consumeKey(event); loadIndex(state.idx - 5); }
-  else if (key === "v") { consumeKey(event); loadIndex(state.idx + 2); }
-  else if (key === "x") { consumeKey(event); loadIndex(state.idx - 10); }
-  else if (key === "z") { consumeKey(event); zoomAt(imageCanvas.clientWidth / 2, imageCanvas.clientHeight / 2, 1.12); }
-  else if (key === "Z") { consumeKey(event); zoomAt(imageCanvas.clientWidth / 2, imageCanvas.clientHeight / 2, 1 / 1.12); }
-  else if (key === "r") { consumeKey(event); resetZoom(); draw(); }
-  else if (key === "a") { consumeKey(event); state.addMode = !state.addMode; draw(); }
+  else if (key === "n" || key === "ArrowRight") { consumeKey(event); loadRelativeIndex(1); }
+  else if (key === "b" || key === "ArrowLeft") { consumeKey(event); loadRelativeIndex(-1); }
+  else if (key === "c") { consumeKey(event); loadRelativeIndex(-5); }
+  else if (key === "v") { consumeKey(event); loadRelativeIndex(2); }
+  else if (key === "x") { consumeKey(event); loadRelativeIndex(-10); }
+  else if (key === "z") { consumeKey(event); zoomFromCenter(1.12); }
+  else if (key === "Z") { consumeKey(event); zoomFromCenter(1 / 1.12); }
+  else if (key === "r") { consumeKey(event); resetView(); }
+  else if (key === "a") { consumeKey(event); toggleAddMode(); }
   else if (key === "Tab" || key === "]") { consumeKey(event); cycleSelection(1); }
   else if (key === "[") { consumeKey(event); cycleSelection(-1); }
   else if (key === "+" || key === "=") { consumeKey(event); cycleClass(1); }
@@ -1005,21 +1177,44 @@ document.addEventListener("keydown", event => {
   else if ((key === "Backspace" || key === "Delete") && event.shiftKey) { consumeKey(event); clearAllBoxes(); }
   else if (key === "Backspace" || key === "Delete") { consumeKey(event); removeSelectedBox(); }
   else if (key === "s") { consumeKey(event); saveLabels(); }
-  else if (key === "d") { consumeKey(event); togglePendingDelete(imageName()); }
+  else if (key === "d") { consumeKey(event); toggleCurrentPendingDelete(); }
   else if (!isButtonActivation(event)) consumeKey(event);
 }, true);
 
-playBtn.addEventListener("click", toggleSlideshow);
-slideshowDirectionBtn.addEventListener("click", toggleSlideshowDirection);
-rescanBtn.addEventListener("click", () => { stopSlideshow(); loadState(state.idx, true); });
-applyDeletesBtn.addEventListener("click", applyDeletes);
+menuGroups.forEach(group => {
+  group.addEventListener("toggle", () => {
+    if (group.open) closeMenus(group);
+  });
+});
+document.addEventListener("click", event => {
+  const target = event.target;
+  if (target instanceof Element && !target.closest(".menuBar")) closeMenus();
+});
+
+prevBtn.addEventListener("click", () => runMenuAction(() => loadRelativeIndex(-1)));
+nextBtn.addEventListener("click", () => runMenuAction(() => loadRelativeIndex(1)));
+addModeBtn.addEventListener("click", () => runMenuAction(toggleAddMode));
+saveBtn.addEventListener("click", () => runMenuAction(saveLabels));
+removeBoxBtn.addEventListener("click", () => runMenuAction(removeSelectedBox));
+clearBoxesBtn.addEventListener("click", () => runMenuAction(clearAllBoxes));
+resetZoomBtn.addEventListener("click", () => runMenuAction(resetView));
+zoomInBtn.addEventListener("click", () => runMenuAction(() => zoomFromCenter(1.12)));
+zoomOutBtn.addEventListener("click", () => runMenuAction(() => zoomFromCenter(1 / 1.12)));
+annotationVisibilityBtn.addEventListener("click", toggleAnnotationsVisible);
+trainingSizeBtn.addEventListener("click", toggleTrainingSize);
+trainingWidthInput.addEventListener("change", applyTrainingSizeInputs);
+trainingHeightInput.addEventListener("change", applyTrainingSizeInputs);
+playBtn.addEventListener("click", () => runMenuAction(toggleSlideshow));
+slideshowDirectionBtn.addEventListener("click", () => runMenuAction(toggleSlideshowDirection));
+markDeleteBtn.addEventListener("click", () => runMenuAction(toggleCurrentPendingDelete));
+rescanBtn.addEventListener("click", () => runMenuAction(rescanDataset));
+applyDeletesBtn.addEventListener("click", () => runMenuAction(applyDeletes));
 closeBtn.addEventListener("click", requestClose);
 closeApplyBtn.addEventListener("click", () => closeEditor(true));
 closeDiscardBtn.addEventListener("click", () => closeEditor(false));
 
-const _slideshowMultiplierEl = document.getElementById("slideshowMultiplier");
-if (_slideshowMultiplierEl) {
-  _slideshowMultiplierEl.addEventListener("change", () => {
+if (slideshowMultiplierEl) {
+  slideshowMultiplierEl.addEventListener("change", () => {
     state.slideshowDelayMs = configuredSlideshowDelayMs();
     if (state.slideshowPlaying) {
       if (state.slideshowTimer != null) window.clearTimeout(state.slideshowTimer);
