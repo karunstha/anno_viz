@@ -34,6 +34,8 @@ const state = {
   trainingSizeEnabled: false,
   trainingWidth: 320,
   trainingHeight: 320,
+  trainingImageCanvas: null,
+  trainingImageKey: "",
 };
 
 const imageCanvas = document.getElementById("imageCanvas");
@@ -105,6 +107,46 @@ function previewDimensions() {
     height: state.image.naturalHeight || 1,
     actualSize: false,
   };
+}
+
+function activeImageSource() {
+  if (!state.trainingSizeEnabled) return state.image;
+
+  const dims = previewDimensions();
+  const key = `${state.image.src}|${dims.width}x${dims.height}`;
+  if (state.trainingImageCanvas && state.trainingImageKey === key) return state.trainingImageCanvas;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = dims.width;
+  canvas.height = dims.height;
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(state.image, 0, 0, dims.width, dims.height);
+  state.trainingImageCanvas = canvas;
+  state.trainingImageKey = key;
+  return canvas;
+}
+
+function sourceToActivePoint(point) {
+  const dims = previewDimensions();
+  return {
+    x: point.x * dims.width / state.image.naturalWidth,
+    y: point.y * dims.height / state.image.naturalHeight,
+  };
+}
+
+function activeToSourcePoint(point) {
+  const dims = previewDimensions();
+  return {
+    x: clamp(Math.round(point.x * state.image.naturalWidth / dims.width), 0, state.image.naturalWidth - 1),
+    y: clamp(Math.round(point.y * state.image.naturalHeight / dims.height), 0, state.image.naturalHeight - 1),
+  };
+}
+
+function sourceBoxToActiveBox(box) {
+  const b = normalizeBox(box);
+  const p1 = sourceToActivePoint({ x: b.x1, y: b.y1 });
+  const p2 = sourceToActivePoint({ x: b.x2, y: b.y2 });
+  return normalizeBox({ ...b, x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y });
 }
 
 function normalizeBox(box) {
@@ -305,18 +347,20 @@ function fitImage() {
 }
 
 function imageToCanvas(x, y) {
+  const dims = previewDimensions();
   return {
-    x: state.display.x + x * state.display.w / state.image.naturalWidth,
-    y: state.display.y + y * state.display.h / state.image.naturalHeight,
+    x: state.display.x + x * state.display.w / dims.width,
+    y: state.display.y + y * state.display.h / dims.height,
   };
 }
 
 function canvasToImage(x, y) {
   const d = state.display;
+  const dims = previewDimensions();
   if (x < d.x || y < d.y || x >= d.x + d.w || y >= d.y + d.h) return null;
   return {
-    x: clamp(Math.round((x - d.x) * state.image.naturalWidth / d.w), 0, state.image.naturalWidth - 1),
-    y: clamp(Math.round((y - d.y) * state.image.naturalHeight / d.h), 0, state.image.naturalHeight - 1),
+    x: clamp(Math.round((x - d.x) * dims.width / d.w), 0, dims.width - 1),
+    y: clamp(Math.round((y - d.y) * dims.height / d.h), 0, dims.height - 1),
   };
 }
 
@@ -329,9 +373,10 @@ function resetZoom() {
 function zoomAt(canvasX, canvasY, delta) {
   if (!state.imageLoaded) return;
   fitImage();
+  const dims = previewDimensions();
   const before = canvasToImage(canvasX, canvasY) ?? {
-    x: state.image.naturalWidth / 2,
-    y: state.image.naturalHeight / 2,
+    x: dims.width / 2,
+    y: dims.height / 2,
   };
   const prevZoom = state.zoom;
   const nextZoom = clamp(Number((prevZoom * delta).toFixed(4)), 1, 12);
@@ -350,8 +395,8 @@ function zoomAt(canvasX, canvasY, delta) {
   const scaledH = Math.max(1, Math.round(imgH * fitScale * state.zoom));
   const centeredX = Math.floor((canvasW - scaledW) / 2);
   const centeredY = Math.floor((canvasH - scaledH) / 2);
-  state.panX = Math.round(canvasX - centeredX - before.x * scaledW / state.image.naturalWidth);
-  state.panY = Math.round(canvasY - centeredY - before.y * scaledH / state.image.naturalHeight);
+  state.panX = Math.round(canvasX - centeredX - before.x * scaledW / imgW);
+  state.panY = Math.round(canvasY - centeredY - before.y * scaledH / imgH);
   fitImage();
   draw();
 }
@@ -395,7 +440,7 @@ function handlePoints(box) {
 }
 
 function nearestHandle(box, x, y) {
-  const radius = 10 * state.image.naturalWidth / Math.max(1, state.display.w);
+  const radius = 10 * previewDimensions().width / Math.max(1, state.display.w);
   let best = null;
   let bestDist = radius + 1;
   for (const [name, [px, py]] of Object.entries(handlePoints(box))) {
@@ -410,7 +455,7 @@ function nearestHandle(box, x, y) {
 
 function hitTest(x, y) {
   for (let i = state.boxes.length - 1; i >= 0; i--) {
-    const b = normalizeBox(state.boxes[i]);
+    const b = sourceBoxToActiveBox(state.boxes[i]);
     if (x >= b.x1 && x <= b.x2 && y >= b.y1 && y <= b.y2) return i;
   }
   return null;
@@ -426,7 +471,7 @@ function drawImageCanvas() {
 
   fitImage();
   const d = state.display;
-  imageCtx.drawImage(state.image, d.x, d.y, d.w, d.h);
+  imageCtx.drawImage(activeImageSource(), d.x, d.y, d.w, d.h);
 
   if (isCurrentPendingDelete()) {
     imageCtx.fillStyle = DELETE_OVERLAY_COLOR;
@@ -446,7 +491,7 @@ function drawImageCanvas() {
 
   if (state.annotationsVisible) {
     for (let i = 0; i < state.boxes.length; i++) {
-      const b = normalizeBox(state.boxes[i]);
+      const b = sourceBoxToActiveBox(state.boxes[i]);
       const p1 = imageToCanvas(b.x1, b.y1);
       const p2 = imageToCanvas(b.x2, b.y2);
       const color = colorFor(b.cls_id);
@@ -712,6 +757,7 @@ async function loadIndex(idx) {
     state.image.src = `${imageUrlByIndex(state.idx)}?t=${Date.now()}`;
   });
   state.imageLoaded = true;
+  state.trainingImageKey = "";
   const raw = await labelPromise;
   state.boxes = parseYolo(raw);
   state.selectedIdx = state.boxes.length ? 0 : null;
@@ -934,6 +980,7 @@ function applyTrainingSizeInputs(drawAfter = true) {
   const changed = nextWidth !== state.trainingWidth || nextHeight !== state.trainingHeight;
   state.trainingWidth = nextWidth;
   state.trainingHeight = nextHeight;
+  if (changed) state.trainingImageKey = "";
   trainingWidthInput.value = String(state.trainingWidth);
   trainingHeightInput.value = String(state.trainingHeight);
 
@@ -981,15 +1028,16 @@ imageCanvas.addEventListener("mousedown", event => {
   }
 
   if (event.button !== 0) return;
-  const point = canvasToImage(event.offsetX, event.offsetY);
-  if (!point) return;
+  const activePoint = canvasToImage(event.offsetX, event.offsetY);
+  if (!activePoint) return;
   if (!state.annotationsVisible) return;
 
+  const sourcePoint = activeToSourcePoint(activePoint);
   state.dragging = true;
-  state.dragStart = point;
+  state.dragStart = sourcePoint;
 
   if (state.addMode) {
-    state.boxes.push({ cls_id: state.selectedClass, x1: point.x, y1: point.y, x2: point.x, y2: point.y });
+    state.boxes.push({ cls_id: state.selectedClass, x1: sourcePoint.x, y1: sourcePoint.y, x2: sourcePoint.x, y2: sourcePoint.y });
     state.selectedIdx = state.boxes.length - 1;
     state.dragAction = "new";
     state.dirty = true;
@@ -997,7 +1045,7 @@ imageCanvas.addEventListener("mousedown", event => {
     return;
   }
 
-  const hit = hitTest(point.x, point.y);
+  const hit = hitTest(activePoint.x, activePoint.y);
   state.selectedIdx = hit;
   if (hit == null) {
     state.dragAction = null;
@@ -1006,7 +1054,8 @@ imageCanvas.addEventListener("mousedown", event => {
   }
 
   state.selectedClass = state.boxes[hit].cls_id;
-  const handle = nearestHandle(state.boxes[hit], point.x, point.y);
+  const activeBox = sourceBoxToActiveBox(state.boxes[hit]);
+  const handle = nearestHandle(activeBox, activePoint.x, activePoint.y);
   state.dragAction = handle ? "resize" : "move";
   state.dragHandle = handle;
   state.dragOriginalBox = { ...state.boxes[hit] };
@@ -1022,8 +1071,9 @@ imageCanvas.addEventListener("mousemove", event => {
   }
 
   if (!state.dragging || state.selectedIdx == null) return;
-  const point = canvasToImage(event.offsetX, event.offsetY);
-  if (!point) return;
+  const activePoint = canvasToImage(event.offsetX, event.offsetY);
+  if (!activePoint) return;
+  const point = activeToSourcePoint(activePoint);
   const box = state.boxes[state.selectedIdx];
 
   if (state.dragAction === "new") {
