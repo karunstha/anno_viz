@@ -102,7 +102,7 @@
       background: #3a3a3a;
     }
     .menuPanel {
-      width: 198px;
+      width: 230px;
       position: absolute;
       top: calc(100% + 6px);
       left: 0;
@@ -143,6 +143,15 @@
       grid-template-columns: 36px minmax(0, 1fr);
       gap: 6px;
       align-items: center;
+    }
+    .menuRowSplit {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 72px);
+    }
+    .menuHint {
+      min-height: 16px;
+      color: #b8b8b8;
+      font-size: 12px;
+      line-height: 1.35;
     }
     .menuClose {
       flex: 0 0 auto;

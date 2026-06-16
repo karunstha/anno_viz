@@ -175,6 +175,49 @@ class WebEditorServer(ThreadingHTTPServer):
             for idx, image_path in enumerate(self._images_cache[start:end], start=start)
         ]
 
+    def search_image_names(self, query, limit=50):
+        query_name = Path(str(query or "").strip().replace("\\", "/")).name
+        query_key = query_name.casefold()
+        query_stem_key = Path(query_name).stem.casefold()
+        if not query_key:
+            return []
+
+        try:
+            limit = max(1, min(int(limit), 200))
+        except (TypeError, ValueError):
+            limit = 50
+
+        ranked = []
+        for idx, image_path in enumerate(self._images_cache):
+            name = image_path.name
+            name_key = name.casefold()
+            stem_key = image_path.stem.casefold()
+            rank = None
+            if name_key == query_key:
+                rank = 0
+            elif query_stem_key and stem_key == query_stem_key:
+                rank = 1
+            elif name_key.startswith(query_key):
+                rank = 2
+            elif query_stem_key and stem_key.startswith(query_stem_key):
+                rank = 3
+            elif query_key in name_key:
+                rank = 4
+            elif query_stem_key and query_stem_key in stem_key:
+                rank = 5
+
+            if rank is not None:
+                ranked.append((rank, name_key, idx, name))
+
+        ranked.sort()
+        return [
+            {
+                "idx": idx,
+                "name": name,
+            }
+            for _, _, idx, name in ranked[:limit]
+        ]
+
     def label_for_name(self, name):
         return self.labels_dir / f"{Path(name).stem}.txt"
 
@@ -327,6 +370,16 @@ class WebEditorHandler(BaseHTTPRequestHandler):
             self.send_json({
                 "entries": self.server.timeline_entries(start, count),
                 "totalImages": self.server.image_count(),
+            })
+            return
+        if parsed.path == "/api/search":
+            query = parse_qs(parsed.query)
+            q = query.get("q", [""])[0]
+            limit = query.get("limit", [50])[0]
+            matches = self.server.search_image_names(q, limit)
+            self.send_json({
+                "matches": matches,
+                "totalMatches": len(matches),
             })
             return
         if parsed.path == "/api/label":

@@ -15,6 +15,20 @@
         <div class="menuPanel">
           <button id="prevBtn" type="button">Previous</button>
           <button id="nextBtn" type="button">Next</button>
+          <label for="positionInput" class="sr-only">Go to position</label>
+          <div class="menuRow menuRowSplit">
+            <input id="positionInput" type="number" min="1" step="1" inputmode="numeric" placeholder="Position">
+            <button id="positionGoBtn" type="button">Go</button>
+          </div>
+          <div id="positionStatus" class="menuHint" role="status"></div>
+          <label for="filenameSearchInput" class="sr-only">Search file name</label>
+          <input id="filenameSearchInput" type="search" autocomplete="off" placeholder="Search file name">
+          <div class="menuRow menuRowSplit">
+            <button id="filenameSearchBtn" type="button">Search</button>
+            <button id="filenameSearchGoBtn" type="button" disabled>Go</button>
+          </div>
+          <select id="filenameSearchResults" aria-label="File search results" hidden></select>
+          <div id="filenameSearchStatus" class="menuHint" role="status"></div>
         </div>
       </details>
       <details class="menuGroup">
@@ -87,7 +101,7 @@
     </aside>
   </main>
   <footer>
-    <div id="help">wheel zoom | right/middle drag pan | dblclick or r reset view | Play slideshow | direction &lt;/&gt; | any key stops slideshow | z/Z zoom | n/Right next | b/Left prev | a add mode | drag box move/resize | Tab or ] next select | [ prev select | +/- class | 0-9 set class | Del remove box | Shift+Del clear all | s save labels | d toggle delete | q close</div>
+    <div id="help">wheel zoom | right/middle drag pan | dblclick or r reset view | Navigate: position jump and file search | Play slideshow | direction &lt;/&gt; | any key stops slideshow | z/Z zoom | n/Right next | b/Left prev | a add mode | drag box move/resize | Tab or ] next select | [ prev select | +/- class | 0-9 set class | Del remove box | Shift+Del clear all | s save labels | d toggle delete | q close</div>
     <canvas id="timelineCanvas"></canvas>
   </footer>
   <div id="closePrompt" class="modalOverlay" hidden>

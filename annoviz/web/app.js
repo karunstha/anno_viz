@@ -47,6 +47,14 @@ const subjectListEl = document.getElementById("subjectList");
 const menuGroups = [...document.querySelectorAll(".menuGroup")];
 const prevBtn = document.getElementById("prevBtn");
 const nextBtn = document.getElementById("nextBtn");
+const positionInput = document.getElementById("positionInput");
+const positionGoBtn = document.getElementById("positionGoBtn");
+const positionStatus = document.getElementById("positionStatus");
+const filenameSearchInput = document.getElementById("filenameSearchInput");
+const filenameSearchBtn = document.getElementById("filenameSearchBtn");
+const filenameSearchGoBtn = document.getElementById("filenameSearchGoBtn");
+const filenameSearchResults = document.getElementById("filenameSearchResults");
+const filenameSearchStatus = document.getElementById("filenameSearchStatus");
 const addModeBtn = document.getElementById("addModeBtn");
 const saveBtn = document.getElementById("saveBtn");
 const removeBoxBtn = document.getElementById("removeBoxBtn");
@@ -269,6 +277,12 @@ function updateStatus() {
   statusEl.textContent = `${state.idx + 1}/${state.imageCount} | ${imageName()} | boxes=${state.boxes.length} | selected=${selected} | add-class=${selectedClass}${pending}${playing}${annotations}${training}`;
   prevBtn.disabled = noImages;
   nextBtn.disabled = noImages;
+  positionInput.disabled = noImages;
+  positionInput.max = String(Math.max(1, state.imageCount));
+  positionGoBtn.disabled = noImages;
+  filenameSearchInput.disabled = noImages;
+  filenameSearchBtn.disabled = noImages;
+  filenameSearchGoBtn.disabled = noImages || filenameSearchResults.hidden || !filenameSearchResults.value;
   addModeBtn.disabled = noImageLoaded || !state.annotationsVisible;
   addModeBtn.classList.toggle("is-active", state.addMode);
   saveBtn.disabled = noImageLoaded || !state.dirty;
@@ -943,6 +957,91 @@ function loadRelativeIndex(delta) {
   return loadIndex(state.idx + delta);
 }
 
+function setPositionStatus(message) {
+  positionStatus.textContent = message;
+}
+
+async function goToPosition() {
+  stopSlideshow();
+  const rawPosition = Number.parseInt(positionInput.value, 10);
+  if (!Number.isFinite(rawPosition)) {
+    setPositionStatus("Enter a position.");
+    positionInput.focus();
+    return;
+  }
+  if (!state.imageCount) return;
+
+  const position = clamp(rawPosition, 1, state.imageCount);
+  positionInput.value = String(position);
+  setPositionStatus(`Opening ${position}/${state.imageCount}.`);
+  closeMenus();
+  await loadIndex(position - 1);
+}
+
+function setFilenameSearchStatus(message) {
+  filenameSearchStatus.textContent = message;
+}
+
+function clearFilenameSearchResults() {
+  filenameSearchResults.textContent = "";
+  filenameSearchResults.hidden = true;
+  filenameSearchGoBtn.disabled = true;
+}
+
+function populateFilenameSearchResults(matches) {
+  filenameSearchResults.textContent = "";
+  matches.forEach(match => {
+    const option = document.createElement("option");
+    option.value = String(match.idx);
+    option.textContent = `${match.idx + 1}: ${match.name}`;
+    filenameSearchResults.appendChild(option);
+  });
+  filenameSearchResults.hidden = matches.length === 0;
+  filenameSearchGoBtn.disabled = matches.length === 0;
+}
+
+async function openSelectedFilenameSearchResult() {
+  const idx = Number.parseInt(filenameSearchResults.value, 10);
+  if (!Number.isFinite(idx)) return;
+  stopSlideshow();
+  const selected = filenameSearchResults.selectedOptions[0]?.textContent ?? "";
+  setFilenameSearchStatus(selected ? `Opening ${selected}` : "Opening match");
+  closeMenus();
+  await loadIndex(idx);
+}
+
+async function searchByFilename() {
+  stopSlideshow();
+  const query = filenameSearchInput.value.trim();
+  clearFilenameSearchResults();
+  if (!query) {
+    setFilenameSearchStatus("Enter a file name.");
+    filenameSearchInput.focus();
+    return;
+  }
+
+  setFilenameSearchStatus("Searching...");
+  const resp = await fetch(`/api/search?q=${encodeURIComponent(query)}&limit=100`);
+  const data = await resp.json();
+  const matches = data.matches ?? [];
+  if (!matches.length) {
+    setFilenameSearchStatus("No matches.");
+    filenameSearchInput.focus();
+    return;
+  }
+
+  if (matches.length === 1) {
+    populateFilenameSearchResults(matches);
+    setFilenameSearchStatus("1 match.");
+    await openSelectedFilenameSearchResult();
+    return;
+  }
+
+  populateFilenameSearchResults(matches);
+  setFilenameSearchStatus(`${matches.length} matches. Choose one.`);
+  filenameSearchResults.focus();
+}
+
 function toggleAddMode() {
   if (!state.annotationsVisible) return;
   stopSlideshow();
@@ -1243,6 +1342,55 @@ document.addEventListener("click", event => {
 
 prevBtn.addEventListener("click", () => runMenuAction(() => loadRelativeIndex(-1)));
 nextBtn.addEventListener("click", () => runMenuAction(() => loadRelativeIndex(1)));
+positionGoBtn.addEventListener("click", () => {
+  goToPosition().catch(error => {
+    console.error("Could not go to position", error);
+    setPositionStatus("Could not open position.");
+  });
+});
+positionInput.addEventListener("input", () => {
+  setPositionStatus("");
+});
+positionInput.addEventListener("keydown", event => {
+  if (event.key !== "Enter") return;
+  consumeKey(event);
+  goToPosition().catch(error => {
+    console.error("Could not go to position", error);
+    setPositionStatus("Could not open position.");
+  });
+});
+filenameSearchBtn.addEventListener("click", () => {
+  searchByFilename().catch(error => {
+    console.error("File search failed", error);
+    setFilenameSearchStatus("Search failed.");
+  });
+});
+filenameSearchGoBtn.addEventListener("click", () => {
+  openSelectedFilenameSearchResult().catch(error => {
+    console.error("Could not open file search result", error);
+    setFilenameSearchStatus("Could not open match.");
+  });
+});
+filenameSearchInput.addEventListener("input", () => {
+  clearFilenameSearchResults();
+  setFilenameSearchStatus("");
+});
+filenameSearchInput.addEventListener("keydown", event => {
+  if (event.key !== "Enter") return;
+  consumeKey(event);
+  searchByFilename().catch(error => {
+    console.error("File search failed", error);
+    setFilenameSearchStatus("Search failed.");
+  });
+});
+filenameSearchResults.addEventListener("keydown", event => {
+  if (event.key !== "Enter") return;
+  consumeKey(event);
+  openSelectedFilenameSearchResult().catch(error => {
+    console.error("Could not open file search result", error);
+    setFilenameSearchStatus("Could not open match.");
+  });
+});
 addModeBtn.addEventListener("click", () => runMenuAction(toggleAddMode));
 saveBtn.addEventListener("click", () => runMenuAction(saveLabels));
 removeBoxBtn.addEventListener("click", () => runMenuAction(removeSelectedBox));
