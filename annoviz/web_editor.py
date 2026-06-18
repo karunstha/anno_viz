@@ -1,5 +1,6 @@
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import importlib.util
+import re
 import os
 from pathlib import Path
 import sys
@@ -14,6 +15,16 @@ from .io_utils import collect_images, load_classes
 
 
 ASSET_DIR = Path(__file__).resolve().parent / "web"
+DEFAULT_PEN_COLOR = "#000000"
+DEFAULT_PEN_SIZE = 16
+MAX_PEN_SIZE = 512
+HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+IMAGE_MIME_BY_SUFFIX = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+}
 
 
 class EditorApi:
@@ -415,6 +426,21 @@ class WebEditorHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urlparse(self.path)
+        if parsed.path == "/api/save-image":
+            query = parse_qs(parsed.query)
+            name = query.get("name", [""])[0]
+            image_path = self.server.image_for_name(name)
+            if image_path is None:
+                self.send_error(404, "image not found")
+                return
+            try:
+                result = save_uploaded_image(image_path, self.read_body_bytes(), self.headers.get("Content-Type", ""))
+            except ValueError as exc:
+                self.send_error(400, str(exc))
+                return
+            self.send_json({"ok": True, **result})
+            return
+
         body = self.read_json()
         if parsed.path == "/api/save":
             name = body.get("name", "")
@@ -427,6 +453,19 @@ class WebEditorHandler(BaseHTTPRequestHandler):
             label_path = self.server.label_for_name(name)
             save_web_label(label_path, boxes, width, height)
             self.send_json({"ok": True})
+            return
+        if parsed.path == "/api/save-image-strokes":
+            name = body.get("name", "")
+            image_path = self.server.image_for_name(name)
+            if image_path is None:
+                self.send_error(404, "image not found")
+                return
+            try:
+                result = apply_image_strokes(image_path, body.get("strokes", []))
+            except RuntimeError as exc:
+                self.send_error(500, str(exc))
+                return
+            self.send_json({"ok": True, **result})
             return
         if parsed.path == "/api/delete":
             deleted = self.server.apply_delete_names(body.get("names", []))
@@ -443,9 +482,12 @@ class WebEditorHandler(BaseHTTPRequestHandler):
         self.send_error(404)
 
     def read_json(self):
-        length = int(self.headers.get("Content-Length", "0"))
-        raw = self.rfile.read(length) if length else b"{}"
+        raw = self.read_body_bytes() or b"{}"
         return json.loads(raw.decode("utf-8") or "{}")
+
+    def read_body_bytes(self):
+        length = int(self.headers.get("Content-Length", "0"))
+        return self.rfile.read(length) if length else b""
 
     def send_text(self, text, content_type):
         data = text.encode("utf-8")
@@ -490,6 +532,128 @@ def save_web_label(label_path, boxes, img_w, img_h):
         lines.append(f"{cls_id} {xc:.6f} {yc:.6f} {bw:.6f} {bh:.6f}")
     label_path.write_text("\n".join(lines) + ("\n" if lines else ""))
     print(f"saved label: {label_path} ({len(lines)} boxes)")
+
+
+def _uploaded_image_mime(data):
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
+def save_uploaded_image(image_path, data, content_type):
+    expected_mime = IMAGE_MIME_BY_SUFFIX.get(image_path.suffix.lower())
+    if expected_mime is None:
+        raise ValueError("unsupported image type for browser image save")
+    if not data:
+        raise ValueError("empty image upload")
+
+    content_type = (content_type or "").split(";", 1)[0].strip().lower()
+    actual_mime = _uploaded_image_mime(data)
+    if content_type != expected_mime or actual_mime != expected_mime:
+        raise ValueError("uploaded image data does not match the original image type")
+
+    image_path.write_bytes(data)
+    print(f"saved edited image: {image_path} ({len(data)} bytes)")
+    return {"bytes": len(data)}
+
+
+def _image_save_format(image_path, original_format):
+    if original_format:
+        return original_format
+
+    suffix = image_path.suffix.lower()
+    if suffix in {".jpg", ".jpeg"}:
+        return "JPEG"
+    if suffix == ".png":
+        return "PNG"
+    if suffix == ".bmp":
+        return "BMP"
+    if suffix == ".webp":
+        return "WEBP"
+    return None
+
+
+def _stroke_color(value):
+    color = str(value or DEFAULT_PEN_COLOR)
+    if HEX_COLOR_RE.match(color):
+        return color
+    return DEFAULT_PEN_COLOR
+
+
+def _stroke_size(value):
+    try:
+        size = int(round(float(value)))
+    except (TypeError, ValueError):
+        size = DEFAULT_PEN_SIZE
+    return max(1, min(size, MAX_PEN_SIZE))
+
+
+def _stroke_points(points, width, height):
+    clean_points = []
+    for point in points if isinstance(points, list) else []:
+        try:
+            x = int(round(float(point.get("x"))))
+            y = int(round(float(point.get("y"))))
+        except (AttributeError, TypeError, ValueError):
+            continue
+        clean_points.append((max(0, min(x, width - 1)), max(0, min(y, height - 1))))
+    return clean_points
+
+
+def apply_image_strokes(image_path, strokes):
+    try:
+        from PIL import Image, ImageDraw
+    except ImportError as exc:
+        raise RuntimeError("Pillow is required to save pen strokes. Install with: python3 -m pip install Pillow") from exc
+
+    if not isinstance(strokes, list) or not strokes:
+        return {"strokes": 0}
+
+    with Image.open(image_path) as original:
+        save_format = _image_save_format(image_path, original.format)
+        width, height = original.size
+        image = original.convert("RGBA")
+
+    draw = ImageDraw.Draw(image)
+    saved_strokes = 0
+    for stroke in strokes:
+        if not isinstance(stroke, dict):
+            continue
+        points = _stroke_points(stroke.get("points", []), width, height)
+        if not points:
+            continue
+
+        color = _stroke_color(stroke.get("color"))
+        size = _stroke_size(stroke.get("size"))
+        radius = max(1, size // 2)
+        if len(points) == 1:
+            x, y = points[0]
+            draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill=color)
+        else:
+            draw.line(points, fill=color, width=size, joint="curve")
+            for x, y in points:
+                draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill=color)
+        saved_strokes += 1
+
+    if not saved_strokes:
+        return {"strokes": 0}
+
+    save_kwargs = {}
+    if save_format == "JPEG":
+        image = image.convert("RGB")
+        save_kwargs.update({"quality": 95, "subsampling": 0})
+    elif save_format in {"BMP"}:
+        image = image.convert("RGB")
+    elif save_format is None:
+        save_format = "PNG"
+
+    image.save(image_path, format=save_format, **save_kwargs)
+    print(f"saved image strokes: {image_path} ({saved_strokes} strokes)")
+    return {"strokes": saved_strokes}
 
 
 def visualize(

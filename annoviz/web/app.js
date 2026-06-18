@@ -10,6 +10,14 @@ const state = {
   selectedIdx: null,
   selectedClass: 0,
   addMode: false,
+  penMode: false,
+  penColor: "#000000",
+  penSize: 16,
+  drawStrokes: [],
+  drawing: false,
+  activeStroke: null,
+  imageDirty: false,
+  saveMessage: "",
   dirty: false,
   zoom: 1,
   panX: 0,
@@ -30,6 +38,7 @@ const state = {
   slideshowTimer: null,
   slideshowDelayMs: 500,
   slideshowDirection: 1,
+  spaceSlideshowHeld: false,
   annotationsVisible: true,
   trainingSizeEnabled: false,
   trainingWidth: 320,
@@ -56,6 +65,11 @@ const filenameSearchGoBtn = document.getElementById("filenameSearchGoBtn");
 const filenameSearchResults = document.getElementById("filenameSearchResults");
 const filenameSearchStatus = document.getElementById("filenameSearchStatus");
 const addModeBtn = document.getElementById("addModeBtn");
+const penModeBtn = document.getElementById("penModeBtn");
+const penColorInput = document.getElementById("penColorInput");
+const penSizeInput = document.getElementById("penSizeInput");
+const undoStrokeBtn = document.getElementById("undoStrokeBtn");
+const clearStrokesBtn = document.getElementById("clearStrokesBtn");
 const saveBtn = document.getElementById("saveBtn");
 const removeBoxBtn = document.getElementById("removeBoxBtn");
 const clearBoxesBtn = document.getElementById("clearBoxesBtn");
@@ -84,6 +98,10 @@ const DELETE_MARK_BORDER = "#ff5a52";
 const DELETE_OVERLAY_COLOR = "rgba(217, 45, 32, 0.28)";
 const ADD_OVERLAY_COLOR = "rgba(43, 213, 118, 0.14)";
 const ADD_OVERLAY_BORDER = "rgba(43, 213, 118, 0.9)";
+const PEN_OVERLAY_BORDER = "rgba(255, 255, 255, 0.85)";
+const DEFAULT_PEN_COLOR = "#000000";
+const DEFAULT_PEN_SIZE = 16;
+const MAX_PEN_SIZE = 512;
 const TIMELINE_SLOT_W = 44;
 const TIMELINE_GAP = 6;
 const TIMELINE_PAD_X = 6;
@@ -100,6 +118,21 @@ function positiveInt(value, fallback) {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed) || parsed < 1) return fallback;
   return clamp(parsed, 1, TRAINING_SIZE_MAX);
+}
+
+function positivePenSize(value, fallback) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed < 1) return fallback;
+  return clamp(parsed, 1, MAX_PEN_SIZE);
+}
+
+function validHexColor(value, fallback = DEFAULT_PEN_COLOR) {
+  const color = String(value || "").trim();
+  return /^#[0-9a-fA-F]{6}$/.test(color) ? color : fallback;
+}
+
+function hasUnsavedChanges() {
+  return state.dirty || state.imageDirty;
 }
 
 function previewDimensions() {
@@ -265,16 +298,18 @@ function hideClosePrompt() {
 }
 
 function updateStatus() {
-  const selected = state.selectedIdx == null ? "none" : classLabel(state.boxes[state.selectedIdx].cls_id);
+  const selected = state.selectedIdx == null || !state.boxes[state.selectedIdx] ? "none" : classLabel(state.boxes[state.selectedIdx].cls_id);
   const selectedClass = classLabel(state.selectedClass);
   const pending = isCurrentPendingDelete() ? " | pending delete" : "";
   const directionName = state.slideshowDirection > 0 ? "right" : "left";
   const playing = state.slideshowPlaying ? ` | playing ${directionName} ${state.slideshowDelayMs}ms` : "";
   const annotations = state.annotationsVisible ? "" : " | annotations hidden";
   const training = state.trainingSizeEnabled ? ` | training ${state.trainingWidth}x${state.trainingHeight}` : "";
+  const drawing = state.imageDirty ? ` | image edits=${state.drawStrokes.length}` : "";
+  const saveMessage = state.saveMessage ? ` | ${state.saveMessage}` : "";
   const noImages = state.imageCount === 0;
   const noImageLoaded = noImages || !state.imageLoaded;
-  statusEl.textContent = `${state.idx + 1}/${state.imageCount} | ${imageName()} | boxes=${state.boxes.length} | selected=${selected} | add-class=${selectedClass}${pending}${playing}${annotations}${training}`;
+  statusEl.textContent = `${state.idx + 1}/${state.imageCount} | ${imageName()} | boxes=${state.boxes.length} | selected=${selected} | add-class=${selectedClass}${pending}${playing}${annotations}${training}${drawing}${saveMessage}`;
   prevBtn.disabled = noImages;
   nextBtn.disabled = noImages;
   positionInput.disabled = noImages;
@@ -285,7 +320,16 @@ function updateStatus() {
   filenameSearchGoBtn.disabled = noImages || filenameSearchResults.hidden || !filenameSearchResults.value;
   addModeBtn.disabled = noImageLoaded || !state.annotationsVisible;
   addModeBtn.classList.toggle("is-active", state.addMode);
-  saveBtn.disabled = noImageLoaded || !state.dirty;
+  penModeBtn.disabled = noImageLoaded;
+  penModeBtn.classList.toggle("is-active", state.penMode);
+  penColorInput.disabled = noImageLoaded;
+  penColorInput.value = state.penColor;
+  penSizeInput.disabled = noImageLoaded;
+  penSizeInput.value = String(state.penSize);
+  undoStrokeBtn.disabled = noImageLoaded || !state.drawStrokes.length;
+  clearStrokesBtn.disabled = noImageLoaded || !state.drawStrokes.length;
+  saveBtn.disabled = noImageLoaded || !hasUnsavedChanges();
+  saveBtn.textContent = state.imageDirty ? "Save Changes" : "Save Labels";
   removeBoxBtn.disabled = state.selectedIdx == null;
   clearBoxesBtn.disabled = !state.boxes.length;
   resetZoomBtn.disabled = noImageLoaded;
@@ -300,7 +344,10 @@ function updateStatus() {
   trainingWidthInput.value = String(state.trainingWidth);
   trainingHeightInput.value = String(state.trainingHeight);
   playBtn.disabled = noImages;
-  playBtn.textContent = state.slideshowPlaying ? "Stop" : "Play";
+  playBtn.textContent = state.slideshowPlaying ? "Pause" : "Play";
+  playBtn.title = state.slideshowPlaying ? "Pause slideshow" : "Play slideshow";
+  playBtn.setAttribute("aria-label", playBtn.title);
+  playBtn.setAttribute("aria-pressed", state.slideshowPlaying ? "true" : "false");
   playBtn.classList.toggle("is-active", state.slideshowPlaying);
   slideshowDirectionBtn.disabled = noImages;
   slideshowDirectionBtn.textContent = state.slideshowDirection > 0 ? ">" : "<";
@@ -313,6 +360,7 @@ function updateStatus() {
   markDeleteBtn.classList.toggle("is-active", isCurrentPendingDelete());
   rescanBtn.disabled = state.slideshowPlaying;
   applyDeletesBtn.disabled = state.pendingDeletes.size === 0;
+  imageCanvas.classList.toggle("is-pen-mode", state.penMode);
 }
 
 function resizeCanvases() {
@@ -442,6 +490,47 @@ function drawTextWithBg(ctx, text, x, y, color) {
   ctx.fillText(text, x + 4, y - 4);
 }
 
+function drawPenStroke(ctx, stroke) {
+  const points = Array.isArray(stroke.points) ? stroke.points : [];
+  if (!points.length || !state.image.naturalWidth) return;
+
+  ctx.save();
+  ctx.strokeStyle = validHexColor(stroke.color, state.penColor);
+  ctx.fillStyle = ctx.strokeStyle;
+  ctx.lineWidth = Math.max(1, (stroke.size || DEFAULT_PEN_SIZE) * state.display.w / state.image.naturalWidth);
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+
+  const activeFirst = sourceToActivePoint(points[0]);
+  const first = imageToCanvas(activeFirst.x, activeFirst.y);
+  if (points.length === 1) {
+    ctx.beginPath();
+    ctx.arc(first.x, first.y, ctx.lineWidth / 2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    return;
+  }
+
+  ctx.beginPath();
+  ctx.moveTo(first.x, first.y);
+  for (const point of points.slice(1)) {
+    const activePoint = sourceToActivePoint(point);
+    const canvasPoint = imageToCanvas(activePoint.x, activePoint.y);
+    ctx.lineTo(canvasPoint.x, canvasPoint.y);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawPendingPenStrokes(ctx) {
+  for (const stroke of state.drawStrokes) {
+    drawPenStroke(ctx, stroke);
+  }
+  if (state.activeStroke && !state.drawStrokes.includes(state.activeStroke)) {
+    drawPenStroke(ctx, state.activeStroke);
+  }
+}
+
 function handlePoints(box) {
   const b = normalizeBox(box);
   const mx = (b.x1 + b.x2) / 2;
@@ -486,6 +575,7 @@ function drawImageCanvas() {
   fitImage();
   const d = state.display;
   imageCtx.drawImage(activeImageSource(), d.x, d.y, d.w, d.h);
+  drawPendingPenStrokes(imageCtx);
 
   if (isCurrentPendingDelete()) {
     imageCtx.fillStyle = DELETE_OVERLAY_COLOR;
@@ -501,6 +591,12 @@ function drawImageCanvas() {
     imageCtx.strokeStyle = ADD_OVERLAY_BORDER;
     imageCtx.lineWidth = 4;
     imageCtx.strokeRect(d.x + 2, d.y + 2, Math.max(0, d.w - 4), Math.max(0, d.h - 4));
+  }
+
+  if (state.penMode) {
+    imageCtx.strokeStyle = PEN_OVERLAY_BORDER;
+    imageCtx.lineWidth = 2;
+    imageCtx.strokeRect(d.x + 1, d.y + 1, Math.max(0, d.w - 2), Math.max(0, d.h - 2));
   }
 
   if (state.annotationsVisible) {
@@ -528,7 +624,7 @@ function drawImageCanvas() {
 
   drawTextWithBg(
     imageCtx,
-    `Mode: ${state.addMode ? "ADD" : "EDIT"}${state.dirty ? " *unsaved" : ""} | Zoom: ${state.zoom.toFixed(1)}x${state.annotationsVisible ? "" : " | Annotations hidden"}${state.trainingSizeEnabled ? ` | Training: ${state.trainingWidth}x${state.trainingHeight}` : ""}`,
+    `Mode: ${state.penMode ? "DRAW" : state.addMode ? "ADD" : "EDIT"}${hasUnsavedChanges() ? " *unsaved" : ""} | Zoom: ${state.zoom.toFixed(1)}x${state.annotationsVisible ? "" : " | Annotations hidden"}${state.trainingSizeEnabled ? ` | Training: ${state.trainingWidth}x${state.trainingHeight}` : ""}`,
     12,
     h - 14,
     "#fff",
@@ -739,6 +835,12 @@ async function loadIndex(idx) {
   state.imageLoaded = false;
   state.selectedIdx = null;
   state.addMode = false;
+  state.penMode = false;
+  state.drawStrokes = [];
+  state.drawing = false;
+  state.activeStroke = null;
+  state.imageDirty = false;
+  state.saveMessage = "";
   state.dragging = false;
   state.dragAction = null;
   state.dragHandle = null;
@@ -799,7 +901,7 @@ async function loadState(startIndex = 0, refresh = false) {
 
 async function saveLabels() {
   if (!state.imageLoaded) return;
-  await fetch("/api/save", {
+  const resp = await fetch("/api/save", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -809,8 +911,149 @@ async function saveLabels() {
       boxes: state.boxes.map(normalizeBox),
     }),
   });
+  if (!resp.ok) throw new Error("Could not save labels");
   state.dirty = false;
   draw();
+}
+
+async function reloadCurrentImage() {
+  if (!state.imageLoaded) return;
+  state.imageLoaded = false;
+  const nextImage = new Image();
+  await new Promise((resolve, reject) => {
+    nextImage.onload = resolve;
+    nextImage.onerror = reject;
+    nextImage.src = `${imageUrlByIndex(state.idx)}?t=${Date.now()}`;
+  });
+  state.image = nextImage;
+  state.imageLoaded = true;
+  state.trainingImageKey = "";
+  state.thumbCache.delete(imageName());
+}
+
+function strokePayload(stroke) {
+  return {
+    color: validHexColor(stroke.color, state.penColor),
+    size: positivePenSize(stroke.size, state.penSize),
+    points: (stroke.points ?? []).map(point => ({
+      x: clamp(Math.round(point.x), 0, state.image.naturalWidth - 1),
+      y: clamp(Math.round(point.y), 0, state.image.naturalHeight - 1),
+    })),
+  };
+}
+
+function imageMimeTypeForName(name) {
+  const lower = String(name || "").toLowerCase();
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+  if (lower.endsWith(".png")) return "image/png";
+  if (lower.endsWith(".webp")) return "image/webp";
+  return "";
+}
+
+function drawSourceStroke(ctx, stroke) {
+  const points = Array.isArray(stroke.points) ? stroke.points : [];
+  if (!points.length) return;
+
+  ctx.save();
+  ctx.strokeStyle = validHexColor(stroke.color, state.penColor);
+  ctx.fillStyle = ctx.strokeStyle;
+  ctx.lineWidth = positivePenSize(stroke.size, state.penSize);
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+
+  const first = points[0];
+  if (points.length === 1) {
+    ctx.beginPath();
+    ctx.arc(first.x, first.y, ctx.lineWidth / 2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    return;
+  }
+
+  ctx.beginPath();
+  ctx.moveTo(first.x, first.y);
+  for (const point of points.slice(1)) {
+    ctx.lineTo(point.x, point.y);
+  }
+  ctx.stroke();
+
+  const radius = ctx.lineWidth / 2;
+  for (const point of points) {
+    ctx.beginPath();
+    ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+function canvasToBlob(canvas, mime) {
+  return new Promise(resolve => {
+    canvas.toBlob(resolve, mime, mime === "image/jpeg" ? 0.95 : undefined);
+  });
+}
+
+async function saveImageSnapshot(strokes) {
+  const mime = imageMimeTypeForName(imageName());
+  if (!mime) return false;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = state.image.naturalWidth;
+  canvas.height = state.image.naturalHeight;
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(state.image, 0, 0, canvas.width, canvas.height);
+  for (const stroke of strokes) drawSourceStroke(ctx, stroke);
+
+  const blob = await canvasToBlob(canvas, mime);
+  if (!blob || blob.type !== mime) return false;
+
+  const resp = await fetch(`/api/save-image?name=${encodeURIComponent(imageName())}`, {
+    method: "POST",
+    headers: { "Content-Type": mime },
+    body: blob,
+  });
+  if (!resp.ok) throw new Error(`Could not save image drawing (${resp.status})`);
+  return true;
+}
+
+async function saveImageStrokesOnServer(strokes) {
+  const resp = await fetch("/api/save-image-strokes", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name: imageName(),
+      strokes,
+    }),
+  });
+  if (!resp.ok) throw new Error(`Could not save image drawings (${resp.status})`);
+}
+
+async function saveImageStrokes() {
+  if (!state.imageLoaded || !state.imageDirty || !state.drawStrokes.length) return;
+  const strokes = state.drawStrokes.map(strokePayload).filter(stroke => stroke.points.length);
+  if (!strokes.length) return;
+  const savedSnapshot = await saveImageSnapshot(strokes);
+  if (!savedSnapshot) await saveImageStrokesOnServer(strokes);
+  state.drawStrokes = [];
+  state.activeStroke = null;
+  state.drawing = false;
+  state.imageDirty = false;
+  await reloadCurrentImage();
+  draw();
+}
+
+async function saveChanges() {
+  try {
+    if (state.dirty) await saveLabels();
+    if (state.imageDirty) await saveImageStrokes();
+    state.saveMessage = "saved";
+    draw();
+  } catch (error) {
+    const message = error?.message || "Save failed";
+    state.saveMessage = message;
+    draw();
+    window.alert(`Save failed: ${message}`);
+    console.error("Save failed", error);
+  }
 }
 
 async function applyDeletes() {
@@ -1045,7 +1288,75 @@ async function searchByFilename() {
 function toggleAddMode() {
   if (!state.annotationsVisible) return;
   stopSlideshow();
+  state.penMode = false;
   state.addMode = !state.addMode;
+  draw();
+}
+
+function applyPenInputs(drawAfter = true) {
+  state.penColor = validHexColor(penColorInput.value, state.penColor);
+  state.penSize = positivePenSize(penSizeInput.value, state.penSize);
+  penColorInput.value = state.penColor;
+  penSizeInput.value = String(state.penSize);
+  if (drawAfter) draw();
+}
+
+function togglePenMode() {
+  stopSlideshow();
+  applyPenInputs(false);
+  state.penMode = !state.penMode;
+  if (state.penMode) {
+    state.addMode = false;
+    state.dragging = false;
+    state.dragAction = null;
+    state.dragHandle = null;
+    state.dragOriginalBox = null;
+  }
+  draw();
+}
+
+function undoLastStroke() {
+  stopSlideshow();
+  if (!state.drawStrokes.length) return;
+  state.drawStrokes.pop();
+  state.activeStroke = null;
+  state.drawing = false;
+  state.imageDirty = state.drawStrokes.length > 0;
+  draw();
+}
+
+function clearPendingStrokes() {
+  stopSlideshow();
+  if (!state.drawStrokes.length) return;
+  state.drawStrokes = [];
+  state.activeStroke = null;
+  state.drawing = false;
+  state.imageDirty = false;
+  draw();
+}
+
+function beginPenStroke(sourcePoint) {
+  applyPenInputs(false);
+  state.saveMessage = "";
+  const stroke = {
+    color: state.penColor,
+    size: state.penSize,
+    points: [sourcePoint],
+  };
+  state.activeStroke = stroke;
+  state.drawStrokes.push(stroke);
+  state.drawing = true;
+  state.imageDirty = true;
+  draw();
+}
+
+function appendPenPoint(sourcePoint) {
+  const points = state.activeStroke?.points;
+  if (!points) return;
+  const last = points[points.length - 1];
+  if (last && Math.hypot(sourcePoint.x - last.x, sourcePoint.y - last.y) < 1) return;
+  points.push(sourcePoint);
+  state.imageDirty = true;
   draw();
 }
 
@@ -1129,9 +1440,16 @@ imageCanvas.addEventListener("mousedown", event => {
   if (event.button !== 0) return;
   const activePoint = canvasToImage(event.offsetX, event.offsetY);
   if (!activePoint) return;
+  const sourcePoint = activeToSourcePoint(activePoint);
+
+  if (state.penMode) {
+    event.preventDefault();
+    beginPenStroke(sourcePoint);
+    return;
+  }
+
   if (!state.annotationsVisible) return;
 
-  const sourcePoint = activeToSourcePoint(activePoint);
   state.dragging = true;
   state.dragStart = sourcePoint;
 
@@ -1166,6 +1484,13 @@ imageCanvas.addEventListener("mousemove", event => {
     state.panX = state.panStart.panX + (event.clientX - state.panStart.x);
     state.panY = state.panStart.panY + (event.clientY - state.panStart.y);
     draw();
+    return;
+  }
+
+  if (state.drawing) {
+    const activePoint = canvasToImage(event.offsetX, event.offsetY);
+    if (!activePoint) return;
+    appendPenPoint(activeToSourcePoint(activePoint));
     return;
   }
 
@@ -1208,6 +1533,16 @@ imageCanvas.addEventListener("mousemove", event => {
 function endImageInteraction() {
   state.panning = false;
   state.panStart = null;
+  if (state.drawing) {
+    if (state.activeStroke && !state.activeStroke.points.length) {
+      state.drawStrokes = state.drawStrokes.filter(stroke => stroke !== state.activeStroke);
+    }
+    state.drawing = false;
+    state.activeStroke = null;
+    state.imageDirty = state.drawStrokes.length > 0;
+    draw();
+    return;
+  }
   if (state.dragAction === "new" && state.selectedIdx != null) {
     const box = normalizeBox(state.boxes[state.selectedIdx]);
     if (box.x2 - box.x1 < 5 || box.y2 - box.y1 < 5) {
@@ -1235,7 +1570,7 @@ imageCanvas.addEventListener("dblclick", () => {
   draw();
 });
 window.addEventListener("mouseup", () => {
-  if (state.panning || state.dragging) endImageInteraction();
+  if (state.panning || state.dragging || state.drawing) endImageInteraction();
 });
 
 timelineCanvas.addEventListener("mousedown", event => {
@@ -1279,14 +1614,32 @@ function isButtonActivation(event) {
     (event.key === "Enter" || event.key === " ");
 }
 
+function isSpaceKey(event) {
+  return event.key === " " || event.key === "Spacebar";
+}
+
+function startSpaceSlideshowHold(event) {
+  consumeKey(event);
+  if (event.repeat || state.spaceSlideshowHeld) return;
+  state.spaceSlideshowHeld = true;
+  startSlideshow();
+}
+
+function stopSpaceSlideshowHold(event = null) {
+  if (!state.spaceSlideshowHeld) return;
+  if (event) consumeKey(event);
+  state.spaceSlideshowHeld = false;
+  stopSlideshow();
+}
+
 document.addEventListener("keydown", event => {
   if (event.defaultPrevented) return;
   const key = event.key;
   const promptOpen = !closePromptEl.hidden;
 
-  if (state.slideshowPlaying) {
-    consumeKey(event);
-    stopSlideshow();
+  if (isSpaceKey(event) && event.target === slideshowMultiplierEl) {
+    slideshowMultiplierEl.blur();
+    startSpaceSlideshowHold(event);
     return;
   }
 
@@ -1308,6 +1661,17 @@ document.addEventListener("keydown", event => {
     return;
   }
 
+  if (isSpaceKey(event)) {
+    startSpaceSlideshowHold(event);
+    return;
+  }
+
+  if (state.slideshowPlaying) {
+    consumeKey(event);
+    stopSlideshow();
+    return;
+  }
+
   if (key === "q" || key === "Escape") { consumeKey(event); requestClose(); }
   else if (key === "n" || key === "ArrowRight") { consumeKey(event); loadRelativeIndex(1); }
   else if (key === "b" || key === "ArrowLeft") { consumeKey(event); loadRelativeIndex(-1); }
@@ -1318,6 +1682,9 @@ document.addEventListener("keydown", event => {
   else if (key === "Z") { consumeKey(event); zoomFromCenter(1 / 1.12); }
   else if (key === "r") { consumeKey(event); resetView(); }
   else if (key === "a") { consumeKey(event); toggleAddMode(); }
+  else if (key === "p") { consumeKey(event); togglePenMode(); }
+  else if (key === "U") { consumeKey(event); clearPendingStrokes(); }
+  else if (key === "u") { consumeKey(event); undoLastStroke(); }
   else if (key === "Tab" || key === "]") { consumeKey(event); cycleSelection(1); }
   else if (key === "[") { consumeKey(event); cycleSelection(-1); }
   else if (key === "+" || key === "=") { consumeKey(event); cycleClass(1); }
@@ -1325,10 +1692,19 @@ document.addEventListener("keydown", event => {
   else if (/^[0-9]$/.test(key)) { consumeKey(event); setSelectedClass(Number(key)); }
   else if ((key === "Backspace" || key === "Delete") && event.shiftKey) { consumeKey(event); clearAllBoxes(); }
   else if (key === "Backspace" || key === "Delete") { consumeKey(event); removeSelectedBox(); }
-  else if (key === "s") { consumeKey(event); saveLabels(); }
+  else if (key === "s") { consumeKey(event); saveChanges().catch(error => console.error("Save failed", error)); }
   else if (key === "d") { consumeKey(event); toggleCurrentPendingDelete(); }
   else if (!isButtonActivation(event)) consumeKey(event);
 }, true);
+
+document.addEventListener("keyup", event => {
+  if (!isSpaceKey(event)) return;
+  stopSpaceSlideshowHold(event);
+}, true);
+
+window.addEventListener("blur", () => {
+  stopSpaceSlideshowHold();
+});
 
 menuGroups.forEach(group => {
   group.addEventListener("toggle", () => {
@@ -1392,7 +1768,12 @@ filenameSearchResults.addEventListener("keydown", event => {
   });
 });
 addModeBtn.addEventListener("click", () => runMenuAction(toggleAddMode));
-saveBtn.addEventListener("click", () => runMenuAction(saveLabels));
+penModeBtn.addEventListener("click", () => runMenuAction(togglePenMode));
+penColorInput.addEventListener("input", () => applyPenInputs());
+penSizeInput.addEventListener("change", () => applyPenInputs());
+undoStrokeBtn.addEventListener("click", () => runMenuAction(undoLastStroke));
+clearStrokesBtn.addEventListener("click", () => runMenuAction(clearPendingStrokes));
+saveBtn.addEventListener("click", () => runMenuAction(saveChanges));
 removeBoxBtn.addEventListener("click", () => runMenuAction(removeSelectedBox));
 clearBoxesBtn.addEventListener("click", () => runMenuAction(clearAllBoxes));
 resetZoomBtn.addEventListener("click", () => runMenuAction(resetView));
@@ -1414,6 +1795,7 @@ closeDiscardBtn.addEventListener("click", () => closeEditor(false));
 if (slideshowMultiplierEl) {
   slideshowMultiplierEl.addEventListener("change", () => {
     state.slideshowDelayMs = configuredSlideshowDelayMs();
+    slideshowMultiplierEl.blur();
     if (state.slideshowPlaying) {
       if (state.slideshowTimer != null) window.clearTimeout(state.slideshowTimer);
       scheduleSlideshowNext();

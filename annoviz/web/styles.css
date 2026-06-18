@@ -182,6 +182,9 @@
       height: 100%;
       display: block;
     }
+    #imageCanvas.is-pen-mode {
+      cursor: crosshair;
+    }
     #subjectPanel {
       display: flex;
       flex-direction: column;
@@ -286,6 +289,27 @@
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+    }
+    #slideshowControls {
+      min-height: 40px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 12px;
+      border-top: 1px solid #292929;
+      border-bottom: 1px solid #292929;
+      background: #181818;
+      overflow-x: auto;
+    }
+    #slideshowControls .panelLabel {
+      flex: 0 0 auto;
+    }
+    #playBtn {
+      min-width: 72px;
+    }
+    #slideshowMultiplier {
+      width: 92px;
+      flex: 0 0 auto;
     }
     #timelineCanvas {
       width: 100%;

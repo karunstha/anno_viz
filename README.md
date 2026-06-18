@@ -182,21 +182,37 @@ Move forward 2 images
 
 Move back 10 images
 
-Play
+Play/Pause
 
-Start or stop slideshow playback
+Start or pause slideshow playback
+
+Space
+
+Hold to play slideshow playback; release to pause
 
 `<`, `>` direction button
 
 Toggle slideshow direction
 
-Any key during slideshow
+Any other key during slideshow
 
 Stop slideshow playback
 
 `a`
 
 Toggle add-annotation mode
+
+`p`
+
+Toggle draw mode for painting over the current image
+
+`u`
+
+Undo the last unsaved drawing stroke
+
+`Shift+u`
+
+Clear unsaved drawing strokes on the current image
 
 Drag box
 
@@ -220,7 +236,7 @@ Remove selected box from the label
 
 `s`
 
-Save label edits
+Save label and drawing edits
 
 `d`
 
